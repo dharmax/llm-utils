@@ -26,6 +26,14 @@
   ],
   "author": "dharmax",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dharmax/llm-utils.git"
+  },
+  "bugs": {
+    "url": "https://github.com/dharmax/llm-utils/issues"
+  },
+  "homepage": "https://github.com/dharmax/llm-utils#readme",
   "dependencies": {},
   "devDependencies": {
     "@types/node": "^22.0.0",
