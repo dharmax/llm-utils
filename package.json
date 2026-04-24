@@ -1,0 +1,35 @@
+{
+  "name": "@dharmax/llm-utils",
+  "version": "0.1.0",
+  "description": "A generic and sophisticated code-to-llm bridge including routing, prompt management, and session context.",
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.mjs"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "esbuild src/index.mts --bundle --platform=node --format=esm --outfile=dist/index.mjs --sourcemap --resolve-extensions=.mts,.mtsx,.js,.json --external:node:fs/promises --external:node:path --external:node:child_process --external:node:util && tsc --emitDeclarationOnly --outDir dist",
+    "test": "node --test dist/tests/**/*.test.js"
+  },
+  "keywords": [
+    "llm",
+    "ai",
+    "routing",
+    "prompt-management",
+    "session-context"
+  ],
+  "author": "dharmax",
+  "license": "MIT",
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.28.0",
+    "typescript": "^5.0.0"
+  }
+}
