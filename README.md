@@ -143,7 +143,28 @@ console.log(result.text);
 
 ### 2. Template-Driven Execution
 
-The legacy constructor remains supported for template workflows that use `ContextManager` and task mappings:
+The recommended path is a pluggable context manager implementation package. `@dharmax/llm-utils` owns the protocol and prompt integration; a separate package owns retrieval, budgeting, and compression policy.
+
+```ts
+import { Asker, PromptEngine } from '@dharmax/llm-utils';
+import { HeuristicContextManager } from '@dharmax/context-manager';
+
+const promptEngine = new PromptEngine(templateSource);
+const contextManager = new HeuristicContextManager(contextStore, {
+  defaultMaxTokens: 500
+});
+
+const asker = new Asker(
+  providerConfigs,
+  taskTypes,
+  contextManager,
+  promptEngine
+);
+```
+
+For local development in this repo, the sibling package lives at `../context-manager`.
+
+The legacy constructor remains supported for template workflows that still use the block-oriented `ContextManager`:
 
 ```ts
 import {
@@ -212,6 +233,8 @@ Main exports:
 
 - `Asker`
 - `CompletionEngine`
+- `ContextResult`, `ContextRequest`, and `PromptContextManager`
+- `LegacyContextManagerAdapter`
 - `ContextCompressor`
 - `ContextManager`
 - `LLMSession`
@@ -240,7 +263,8 @@ The test suite exercises the built package in `dist/`, not only the source files
 
 ## Current Limitations
 
-- The scoring heuristics are intentionally lightweight.
+- The built-in `ContextManager` remains a legacy block-oriented API for compatibility.
+- The default external context package is still heuristic rather than semantic.
 - Prompt template manifests are JSON-frontmatter only.
 - The package currently uses minimal fake-free unit coverage rather than live provider integration tests.
 - `LLMSession` keeps a short in-memory history and is not persistence-backed.

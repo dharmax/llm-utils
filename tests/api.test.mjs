@@ -10,6 +10,7 @@ import {
   PromptEngine,
   ProviderDiscovery
 } from '../dist/index.mjs';
+import { HeuristicContextManager } from '../../context-manager/dist/index.mjs';
 
 class MemoryTemplateSource {
   constructor(entries) {
@@ -165,6 +166,66 @@ test('Asker legacy constructor keeps prompt injection behavior', async () => {
   assert.equal(result.text.includes('Question: Explain routing'), true);
   assert.equal(result.text.includes('Routing Notes'), true);
   assert.equal(result.text.includes('Stay grounded'), true);
+});
+
+test('Asker accepts a protocol-based context manager from the external package', async () => {
+  const providerId = 'unit-protocol';
+  registerEchoAdapter(providerId);
+
+  const promptEngine = new PromptEngine(new MemoryTemplateSource({
+    'draft.system': '--- json\n{"taskType":"code-generation","inject":[{"type":"context_blocks","key":"context","categories":["docs"],"maxTokens":80,"maxItems":1}]}\n---\nStay grounded',
+    'draft.prompt': 'Question: {{ inputText }}\nContext:\n{{ context }}'
+  }));
+
+  const contextManager = new HeuristicContextManager(new MemoryContextStore([
+    {
+      id: 'ctx-1',
+      category: 'docs',
+      tags: ['routing'],
+      title: 'Routing Notes',
+      body: 'Prefer the strongest available model for logic-heavy work.'
+    },
+    {
+      id: 'ctx-2',
+      category: 'docs',
+      tags: ['storage'],
+      title: 'Storage Notes',
+      body: 'Separate the protocol from the implementation package.'
+    }
+  ]));
+
+  const asker = new Asker(
+    [{ id: providerId, available: true }],
+    [
+      {
+        id: 'code-generation',
+        shortName: 'code',
+        description: 'Code generation',
+        weights: { logic: 0.8, strategy: 0.2 }
+      }
+    ],
+    contextManager,
+    promptEngine
+  );
+
+  await asker.refreshMapping([
+    {
+      id: 'protocol-model',
+      providerId,
+      quality: 'high',
+      capabilities: { logic: 0.95, strategy: 0.8 }
+    }
+  ]);
+
+  const result = await asker.prompt('draft', {}, {
+    inputText: 'Explain routing',
+    context: '',
+    taskType: 'code-generation'
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.text.includes('Routing Notes'), true);
+  assert.equal(result.text.includes('Storage Notes'), false);
 });
 
 test('LLMSession records history and metrics across successful turns', async () => {

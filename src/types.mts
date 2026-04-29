@@ -69,6 +69,17 @@ export interface GenerationResult {
   response?: string;
 }
 
+export type {
+  ContextDiagnostics,
+  ContextHistoryItem,
+  ContextHistoryRole,
+  ContextItem,
+  ContextItemKind,
+  ContextRequest,
+  ContextResult,
+  PromptContextManager
+} from './context/protocol.mjs';
+
 export interface SessionContext {
   history: Array<{ role: 'user' | 'ai'; content: string }>;
   managedContext?: string;

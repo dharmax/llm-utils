@@ -1,5 +1,6 @@
 import {
   AskerOptions,
+  ContextRequest,
   ProviderId,
   ProviderConfig,
   TaskType,
@@ -10,6 +11,13 @@ import {
 } from './types.mjs';
 import { PromptEngine } from './prompts/prompt-engine.mjs';
 import { ContextManager } from './context/context-manager.mjs';
+import {
+  isLegacyContextManager,
+  isPromptContextManager,
+  LegacyContextManagerAdapter
+} from './context/adapters.mjs';
+import { PromptContextManager } from './context/protocol.mjs';
+import { renderContextResult } from './context/render.mjs';
 import { CompletionEngine } from './router/completion-engine.mjs';
 import { ModelRouter } from './router/model-router.mjs';
 import { SystemProbe } from './io/system.mjs';
@@ -22,7 +30,7 @@ export class Asker {
   private providerConfigs: Map<ProviderId, ProviderConfig> = new Map();
   private taskTypes: Map<string, TaskType> = new Map();
   private modelFitMatrix: Map<string, ModelInfo[]> = new Map();
-  private contextManager?: ContextManager;
+  private contextManager?: ContextManager | PromptContextManager;
   private promptEngine: PromptEngine;
   private router?: ModelRouter;
 
@@ -30,13 +38,13 @@ export class Asker {
   constructor(
     providers: ProviderConfig[],
     taskTypes: TaskType[],
-    contextManager: ContextManager,
+    contextManager: ContextManager | PromptContextManager,
     promptEngine: PromptEngine
   );
   constructor(
     providersOrOptions: AskerOptions | ProviderConfig[],
     taskTypes: TaskType[] = [],
-    contextManager?: ContextManager,
+    contextManager?: ContextManager | PromptContextManager,
     promptEngine?: PromptEngine
   ) {
     if (Array.isArray(providersOrOptions)) {
@@ -106,11 +114,7 @@ export class Asker {
     if (manifest.inject && this.contextManager) {
       for (const item of manifest.inject) {
         if (item.type === 'context_blocks') {
-          const blocks = await this.contextManager.getRelevantBlocks(
-            data.inputText || '',
-            item.categories || []
-          );
-          variables[item.key] = blocks.map(b => `### ${b.title}\n${b.body}`).join('\n\n');
+          variables[item.key] = await this.resolveInjectedContext(item, data, manifest);
         }
       }
     }
@@ -180,5 +184,47 @@ export class Asker {
       default:
         return { logic: 0.5, strategy: 0.5 };
     }
+  }
+
+  private async resolveInjectedContext(item: any, data: any, manifest: any): Promise<string> {
+    const query = data.inputText || data.prompt || '';
+    const taskType = data.taskType || manifest.taskType || 'default';
+
+    if (isPromptContextManager(this.contextManager)) {
+      const request: ContextRequest = {
+        query,
+        taskType,
+        categories: item.categories || [],
+        history: Array.isArray(data.history) ? data.history : undefined,
+        maxItems: item.maxItems,
+        maxTokens: item.maxTokens,
+        hints: item.hints,
+        output: {
+          mode: 'both',
+          format: 'markdown'
+        }
+      };
+      const result = await this.contextManager.resolve(request);
+      return renderContextResult(result, 'markdown');
+    }
+
+    if (isLegacyContextManager(this.contextManager)) {
+      const adapter = new LegacyContextManagerAdapter(this.contextManager);
+      const result = await adapter.resolve({
+        query,
+        taskType,
+        categories: item.categories || [],
+        maxItems: item.maxItems,
+        maxTokens: item.maxTokens,
+        history: Array.isArray(data.history) ? data.history : undefined,
+        output: {
+          mode: 'both',
+          format: 'markdown'
+        }
+      });
+      return renderContextResult(result, 'markdown');
+    }
+
+    return '';
   }
 }
