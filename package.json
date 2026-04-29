@@ -15,7 +15,7 @@
   ],
   "scripts": {
     "build": "esbuild src/index.mts --bundle --platform=node --format=esm --outfile=dist/index.mjs --sourcemap --resolve-extensions=.mts,.mtsx,.js,.json --external:node:fs/promises --external:node:path --external:node:child_process --external:node:util && tsc --emitDeclarationOnly --outDir dist",
-    "test": "node --test dist/tests/**/*.test.js"
+    "test": "npm run build && node --test tests/**/*.test.mjs"
   },
   "keywords": [
     "llm",
