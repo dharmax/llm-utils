@@ -17,4 +17,5 @@ export interface StorageBackend {
  */
 export interface TemplateSource {
   fetch(name: string): Promise<string>;
+  load?(name: string): Promise<string>; // Compatibility alias
 }

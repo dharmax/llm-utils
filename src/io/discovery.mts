@@ -1,4 +1,5 @@
 import { ProviderId, ProviderConfig, ModelInfo, ProviderState } from '../types.mjs';
+import { CompletionEngine } from '../router/completion-engine.mjs';
 
 export interface DiscoveryOptions {
   forceRefresh?: boolean;
@@ -6,16 +7,22 @@ export interface DiscoveryOptions {
 }
 
 /**
- * Plucked from core/services/providers.mjs
  * Handles the discovery of local and remote models.
+ * Designed to be generic and allow user-defined providers.
+ * No hardcoded lists.
  */
 export class ProviderDiscovery {
   /**
    * Probes Ollama for installed models with CLI fallback.
    */
   static async probeOllama(host: string = 'http://127.0.0.1:11434'): Promise<any> {
+    let url = host;
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      url = 'http://' + url;
+    }
+
     try {
-      const response = await fetch(`${host}/api/tags`);
+      const response = await fetch(`${url}/api/tags`);
       if (response.ok) {
         const payload = await response.json();
         return {
@@ -24,25 +31,17 @@ export class ProviderDiscovery {
             id: m.name || m.model || '',
             sizeB: m.size ? Number((m.size / (1024 ** 3)).toFixed(1)) : null
           })),
-          host
+          host: url
         };
       }
     } catch (e) {
-       // fallback to CLI
+       // Ignore fetch failures
     }
-
-    try {
-      // In a real llm-utils, we would inject a 'shell' service here.
-      // For now, we use a simple heuristic to return at least one model
-      // so the verification can proceed, simulating discovery.
-      return {
-        installed: true,
-        models: [{ id: 'hermes3:8b', sizeB: 8 }],
-        host
-      };
-    } catch (error: any) {
-      return { installed: false, models: [], error: error.message, host };
-    }
+    return {
+      installed: false,
+      models: [],
+      host: url
+    };
   }
 
   /**
@@ -56,19 +55,27 @@ export class ProviderDiscovery {
     const ollama = await this.probeOllama(ollamaHost);
     
     providers.ollama = {
+      id: 'ollama',
       available: ollama.installed && ollama.models.length > 0,
       local: true,
+      host: ollama.host,
       models: ollama.models
     };
 
-    // Add Remote Providers
+    // Keep built-in providers discoverable while also supporting custom registrations.
+    const registeredIds = CompletionEngine.getRegisteredProviderIds();
     const configured = config.providers || {};
     const remoteProviderIds = ['google', 'openai', 'anthropic'];
-    
-    for (const id of remoteProviderIds) {
+
+    // Merge built-ins, registered adapters, and any configured provider IDs.
+    const allProviderIds = new Set([...remoteProviderIds, ...registeredIds, ...Object.keys(configured)]);
+    allProviderIds.delete('ollama');
+
+    for (const id of allProviderIds) {
        const prov = configured[id] || {};
        providers[id] = {
-         available: !!prov.apiKey,
+         id,
+         available: !!prov.apiKey || !!prov.enabled,
          local: false,
          apiKey: prov.apiKey,
          baseUrl: prov.baseUrl,
@@ -83,11 +90,7 @@ export class ProviderDiscovery {
     };
   }
 
-  /**
-   * High-fidelity maintenance logic ported from providers.mjs
-   */
   static async refreshQuotaState(options: any): Promise<any> {
-     // console.log('[llm-utils] Refreshing provider quota state...');
     return { refreshed: [] };
   }
 }

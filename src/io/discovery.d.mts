@@ -4,7 +4,6 @@ export interface DiscoveryOptions {
     cacheTtlMs?: number;
 }
 /**
- * Plucked from core/services/providers.mjs
  * Handles the discovery of local and remote models.
  */
 export declare class ProviderDiscovery {
@@ -16,8 +15,5 @@ export declare class ProviderDiscovery {
      * Normalizes configured provider models and status.
      */
     static discover(config: any, knowledge: any): Promise<ProviderState>;
-    /**
-     * High-fidelity maintenance logic ported from providers.mjs
-     */
     static refreshQuotaState(options: any): Promise<any>;
 }

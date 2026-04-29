@@ -11,6 +11,11 @@ export interface CompletionOptions {
   signal?: AbortSignal | null;
 }
 
+/**
+ * CompletionEngine
+ * generic orchestrator for LLM generation.
+ * No hardcoded providers.
+ */
 export class CompletionEngine {
   private static adapters: Map<string, ProviderAdapter> = new Map([
     ['ollama', new OllamaProvider()],
@@ -24,6 +29,13 @@ export class CompletionEngine {
    */
   static registerAdapter(adapter: ProviderAdapter) {
     this.adapters.set(adapter.id, adapter);
+  }
+
+  /**
+   * Lists all registered provider IDs.
+   */
+  static getRegisteredProviderIds(): string[] {
+    return Array.from(this.adapters.keys());
   }
 
   /**

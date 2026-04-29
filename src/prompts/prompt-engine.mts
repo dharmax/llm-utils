@@ -1,17 +1,27 @@
 import { PromptTemplate } from '../types.mjs';
 import { TemplateSource } from '../core/interfaces.mjs';
 
+/**
+ * PromptEngine
+ * Manages loading, parsing, and rendering of multi-part LLM templates.
+ */
 export class PromptEngine {
-  constructor(private source: TemplateSource) {}
+  private source: TemplateSource;
+
+  constructor(source?: TemplateSource) {
+    this.source = source || {
+        fetch: async () => ''
+    } as any;
+  }
 
   /**
    * Loads both .system.md and .prompt.md parts of a template.
-   * Gold logic ported and enhanced from filesystem.mjs.
    */
   async load(name: string): Promise<PromptTemplate> {
-    // Porting high-fidelity multi-part template loading
-    const systemRaw = await this.source.fetch(`${name}.system`).catch(() => '');
-    const promptRaw = await this.source.fetch(`${name}.prompt`).catch(() => '');
+    const fetchFn = (this.source.fetch || this.source.load || (async () => '')).bind(this.source);
+
+    const systemRaw = await fetchFn(`${name}.system`).catch(() => '');
+    const promptRaw = await fetchFn(`${name}.prompt`).catch(() => '');
 
     const system = this.parse(systemRaw);
     const prompt = this.parse(promptRaw);
@@ -38,7 +48,7 @@ export class PromptEngine {
         manifest = JSON.parse(frontmatterMatch[1]);
         content = raw.slice(frontmatterMatch[0].length);
       } catch (e) {
-        console.error('[prompt-engine] JSON parse error:', e);
+        // Ignore parse errors
       }
     }
 

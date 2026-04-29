@@ -6,6 +6,9 @@ export interface ProviderConfig {
   baseUrl?: string;
   host?: string;
   enabled?: boolean;
+  available?: boolean;
+  models?: ModelInfo[];
+  local?: boolean;
 }
 
 export interface ModelCapabilities {
@@ -63,6 +66,7 @@ export interface GenerationResult {
   error?: string;
   raw?: any;
   latencyMs?: number;
+  response?: string;
 }
 
 export interface SessionContext {
@@ -88,17 +92,16 @@ export interface ProviderState {
   knowledge?: any;
 }
 
-/**
- * Superb Abstraction for Provider Adapters.
- */
+export interface AskerOptions {
+  providerState: ProviderState;
+  promptEngine?: any;
+}
+
 export interface ProviderAdapter {
   id: ProviderId;
   generate(options: GenerateOptions): Promise<GenerationResult>;
 }
 
-/**
- * Superb Abstraction for Interaction Providers.
- */
 export interface InteractionProvider {
   id: ProviderId;
   generate(turn: InteractionTurn, config: ProviderConfig): Promise<GenerationResult>;

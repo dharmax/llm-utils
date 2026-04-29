@@ -1,4 +1,4 @@
-import { ProviderConfig, ModelInfo, TaskType } from '../types.mjs';
+import { ProviderConfig, ModelInfo, TaskType, ProviderState } from '../types.mjs';
 
 export interface RouterOptions {
   preferLocal?: boolean;
@@ -8,13 +8,47 @@ export interface RouterOptions {
 export interface ScoringHeuristics {
   [capability: string]: {
     keywords: string[];
-  };
+  }
 }
 
+/**
+ * ModelRouter
+ * Instance-based router that scores and selects models.
+ */
 export class ModelRouter {
+  constructor(private providerState: ProviderState) {}
+
   /**
-   * Scores models against a specific task type using heuristics.
-   * Logic ported from model-fit.mjs.
+   * Routes a task to the best available model.
+   */
+  route(taskType: TaskType, options: { allowWeak?: boolean } = {}): ModelInfo | null {
+    const providers = Object.values(this.providerState.providers);
+    const availableModels: any[] = [];
+
+    for (const p of providers) {
+      if (p.available && p.models) {
+        for (const m of p.models) {
+          availableModels.push({ ...m, providerId: p.id || (p as any).providerId });
+        }
+      }
+    }
+
+    const scored = ModelRouter.scoreModels(
+      providers,
+      taskType,
+      availableModels,
+      this.providerState.knowledge?.heuristics || {}
+    );
+
+    return scored[0] || null;
+  }
+
+  getProviderConfig(providerId: string): ProviderConfig {
+    return this.providerState.providers[providerId];
+  }
+
+  /**
+   * Static logic ported from model-fit.mjs.
    */
   static scoreModels(providers: ProviderConfig[], taskType: TaskType, models: any[], heuristics: ScoringHeuristics = {}): ModelInfo[] {
     const taskWeights = this.getTaskWeights(taskType.id);
@@ -33,23 +67,24 @@ export class ModelRouter {
         fitScore,
         fitReasons: [`capability fit ${capabilityScore.toFixed(1)}/100`, `quality ${model.quality || 'medium'}`],
         quality: model.quality,
-        costTier: model.costTier
+        local: model.local
       });
     }
 
-    return scoredModels.sort((a, b) => (b.fitScore || 0) - (a.fitScore || 0));
+    scoredModels.sort((a, b) => (b.fitScore || 0) - (a.fitScore || 0));
+    return scoredModels;
   }
 
   /**
    * Routes a task to the best available candidate.
    */
   static route(candidates: ModelInfo[], options: RouterOptions = {}): ModelInfo | null {
-    const available = candidates.filter(c => c.fitScore !== undefined && c.fitScore > 0);
+    const available = candidates.filter(c => (c.fitScore || 0) > 0);
     if (!available.length) return null;
-    
+
     let filtered = available;
     if (options.preferLocal) {
-      const local = available.filter(c => c.providerId === 'ollama');
+      const local = available.filter(c => c.providerId === 'ollama' || c.local);
       if (local.length) {
         filtered = local;
       } else if (!options.allowWeak) {
@@ -57,38 +92,19 @@ export class ModelRouter {
       }
     }
 
-    return filtered[0];
+    return filtered[0] || null;
   }
 
-  private static inferCapabilities(model: any, heuristics: ScoringHeuristics) {
-    const lower = String(model.id).toLowerCase();
-    const base = model.quality === 'high' ? 3.5 : model.quality === 'medium' ? 2.5 : 1.5;
-    const result: any = { logic: base, strategy: base, prose: base, visual: base, data: base };
-
-    const checks = {
-      logic: ['coder', 'code', 'math', ...(heuristics.logic?.keywords || [])],
-      strategy: ['reason', 'reasoning', 'plan', 'planner', 'agent', 'analysis', ...(heuristics.strategy?.keywords || [])],
-      prose: ['llama', 'gemma', 'chat', 'assistant', ...(heuristics.prose?.keywords || [])],
-      visual: ['vision', 'moondream', ...(heuristics.visual?.keywords || [])],
-      data: ['extract', 'summary', 'json']
-    };
-
-    for (const [cap, keywords] of Object.entries(checks)) {
-      if (keywords.some(k => lower.includes(k.toLowerCase()))) {
-        result[cap] += 1;
-      }
+  private static scoreCapabilities(capabilities: any, weights: any): number {
+    let score = 0;
+    for (const [key, weight] of Object.entries(weights)) {
+      score += (capabilities[key] || 0) * (weight as number);
     }
-    return result;
+    return score * 100;
   }
 
-  private static scoreCapabilities(caps: any, weights: any) {
-    let sum = 0;
-    let totalWeight = 0;
-    for (const [cap, weight] of Object.entries(weights)) {
-      sum += (Math.max(0, Math.min(5, caps[cap] || 0)) / 5) * (weight as number);
-      totalWeight += (weight as number);
-    }
-    return (sum / (totalWeight || 1)) * 100;
+  private static inferCapabilities(model: any, heuristics: ScoringHeuristics): any {
+    return model.capabilities || { logic: 0.5, strategy: 0.5 };
   }
 
   private static getTaskWeights(taskClass: string) {

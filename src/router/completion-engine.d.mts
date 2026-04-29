@@ -12,6 +12,10 @@ export declare class CompletionEngine {
      */
     static registerAdapter(adapter: ProviderAdapter): void;
     /**
+     * Lists all registered provider IDs.
+     */
+    static getRegisteredProviderIds(): string[];
+    /**
      * Executes a completion request against a specific provider.
      */
     static generate(prompt: string, model: ModelInfo, config: ProviderConfig, options?: CompletionOptions): Promise<GenerationResult>;
