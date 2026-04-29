@@ -1,6 +1,6 @@
 {
   "name": "@dharmax/llm-utils",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A generic and sophisticated code-to-llm bridge including routing, prompt management, and session context.",
   "type": "module",
   "main": "./dist/index.mjs",
@@ -35,7 +35,9 @@
     "url": "https://github.com/dharmax/llm-utils/issues"
   },
   "homepage": "https://github.com/dharmax/llm-utils#readme",
-  "dependencies": {},
+  "dependencies": {
+    "@dharmax/pubsub": "^1.2.0"
+  },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "esbuild": "^0.28.0",

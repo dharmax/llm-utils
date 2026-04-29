@@ -5,7 +5,10 @@ import {
   Asker,
   CompletionEngine,
   ContextManager,
+  createMetricsPubSub,
+  InMemoryMetricsStore,
   LLMSession,
+  LlmMetrics,
   ModelRouter,
   PromptEngine,
   ProviderDiscovery
@@ -268,6 +271,86 @@ test('LLMSession records history and metrics across successful turns', async () 
   assert.equal(context.history.length, 2);
   assert.equal(context.history[0].content, 'Hello there');
   assert.equal(context.metrics.totalTokens, 8);
+});
+
+test('LlmMetrics aggregates totals, groupings, and time buckets with in-memory storage', () => {
+  const metrics = new LlmMetrics(new InMemoryMetricsStore());
+
+  metrics.record({
+    timestamp: '2026-04-01T10:00:10.000Z',
+    providerId: 'openai',
+    modelId: 'gpt-4o-mini',
+    promptTokens: 100,
+    completionTokens: 40,
+    latencyMs: 900,
+    success: true,
+    costUsd: 0.002
+  });
+  metrics.record({
+    timestamp: '2026-04-01T10:00:50.000Z',
+    providerId: 'openai',
+    modelId: 'gpt-4o-mini',
+    promptTokens: 120,
+    completionTokens: 30,
+    latencyMs: 1100,
+    success: false,
+    error: 'timeout',
+    costUsd: 0.003
+  });
+  metrics.record({
+    timestamp: '2026-04-01T11:15:00.000Z',
+    providerId: 'ollama',
+    modelId: 'qwen2.5-coder:7b',
+    promptTokens: 80,
+    completionTokens: 20,
+    latencyMs: 600,
+    success: true
+  });
+
+  const totals = metrics.totals();
+  assert.equal(totals.calls, 3);
+  assert.equal(totals.totalTokens, 390);
+  assert.equal(totals.failures, 1);
+  assert.equal(totals.successRate, 66.67);
+
+  const byProvider = metrics.byProvider();
+  assert.equal(byProvider.length, 2);
+  assert.equal(byProvider.find((entry) => entry.providerId === 'openai').metrics.calls, 2);
+
+  const byModel = metrics.byModel();
+  assert.equal(byModel.find((entry) => entry.modelId === 'gpt-4o-mini').metrics.totalTokens, 290);
+
+  const hourly = metrics.timeseries('hour');
+  assert.equal(hourly.length, 2);
+  assert.equal(hourly[0].metrics.calls, 2);
+
+  const providerHourly = metrics.timeseries('hour', {}, 'provider');
+  assert.equal(providerHourly.length, 2);
+  assert.equal(providerHourly[0].providerId === 'ollama' || providerHourly[0].providerId === 'openai', true);
+});
+
+test('LlmMetrics can publish metric events over pubsub', () => {
+  const bus = createMetricsPubSub('Metrics Test');
+  const metrics = new LlmMetrics(new InMemoryMetricsStore(), { bus, origin: 'unit-test' });
+  let received = null;
+
+  bus.on('metrics:recorded', (_event, data) => {
+    received = data;
+    return true;
+  });
+
+  metrics.record({
+    timestamp: '2026-04-01T12:00:00.000Z',
+    providerId: 'openai',
+    modelId: 'gpt-4o-mini',
+    promptTokens: 10,
+    completionTokens: 5,
+    latencyMs: 250,
+    success: true
+  });
+
+  assert.equal(received.providerId, 'openai');
+  assert.equal(received.totalTokens, 15);
 });
 
 test('ProviderDiscovery keeps built-in providers visible and normalizes ollama host', async () => {
