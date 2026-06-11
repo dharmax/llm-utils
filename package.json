@@ -1,12 +1,15 @@
 {
   "name": "@dharmax/llm-utils",
   "version": "0.1.1",
-  "description": "A generic and sophisticated code-to-llm bridge including routing, prompt management, and session context.",
+  "description": "Small LLM utility primitives for routing, prompts, context, sessions, metrics, and provider adapters.",
   "type": "module",
   "main": "./dist/index.mjs",
-  "types": "./dist/index.d.ts",
+  "types": "./dist/index.d.mts",
   "exports": {
-    ".": "./dist/index.mjs"
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    }
   },
   "files": [
     "dist",
@@ -14,7 +17,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "esbuild src/index.mts --bundle --platform=node --format=esm --outfile=dist/index.mjs --sourcemap --resolve-extensions=.mts,.mtsx,.js,.json --external:node:fs/promises --external:node:path --external:node:child_process --external:node:util && tsc --emitDeclarationOnly --outDir dist",
+    "build": "rm -rf dist && esbuild src/index.mts --bundle --platform=node --format=esm --outfile=dist/index.mjs --sourcemap --resolve-extensions=.mts,.mtsx,.js,.json --external:node:fs/promises --external:node:path --external:node:child_process --external:node:util && tsc --emitDeclarationOnly --outDir dist",
     "build:context-manager": "npm --prefix ../context-manager run build",
     "test": "npm run build && npm run build:context-manager && node --test tests/**/*.test.mjs"
   },

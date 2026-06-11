@@ -34,8 +34,9 @@ export interface ModelInfo {
 
 export interface TaskType {
   id: string;
-  shortName: string;
-  description: string;
+  shortName?: string;
+  description?: string;
+  desc?: string;
   weights: Partial<ModelCapabilities>;
 }
 
@@ -64,42 +65,33 @@ export interface GenerationResult {
     modelId: string;
   };
   error?: string;
-  raw?: any;
+  err?: string;
+  raw?: unknown;
   latencyMs?: number;
   response?: string;
+  res?: string;
 }
-
-export type {
-  ContextDiagnostics,
-  ContextHistoryItem,
-  ContextHistoryRole,
-  ContextItem,
-  ContextItemKind,
-  ContextRequest,
-  ContextResult,
-  PromptContextManager
-} from './context/protocol.mjs';
 
 export interface SessionContext {
   history: Array<{ role: 'user' | 'ai'; content: string }>;
   managedContext?: string;
-  metrics?: any;
+  metrics?: unknown;
 }
 
 export interface PromptTemplate {
   content: string;
-  manifest: any;
+  manifest: Record<string, any>;
 }
 
 export interface SystemStatus {
   ok: boolean;
   details?: string;
-  leanCtx?: any;
+  leanCtx?: unknown;
 }
 
 export interface ProviderState {
   providers: Record<string, ProviderConfig>;
-  routingPolicy: any;
+  routingPolicy?: unknown;
   knowledge?: any;
 }
 

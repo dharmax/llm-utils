@@ -1,6 +1,5 @@
 import {
   AskerOptions,
-  ContextRequest,
   ProviderId,
   ProviderConfig,
   TaskType,
@@ -9,18 +8,19 @@ import {
   InteractionTurn,
   SystemStatus
 } from './types.mjs';
-import { PromptEngine } from './prompts/prompt-engine.mjs';
-import { ContextManager } from './context/context-manager.mjs';
+import { PromptEngine } from './prompts.mjs';
 import {
+  ContextManager,
+  ContextRequest,
   isLegacyContextManager,
   isPromptContextManager,
-  LegacyContextManagerAdapter
-} from './context/adapters.mjs';
-import { PromptContextManager } from './context/protocol.mjs';
-import { renderContextResult } from './context/render.mjs';
-import { CompletionEngine } from './router/completion-engine.mjs';
-import { ModelRouter } from './router/model-router.mjs';
-import { SystemProbe } from './io/system.mjs';
+  LegacyContextManagerAdapter,
+  PromptContextManager,
+  renderContextResult
+} from './context.mjs';
+import { CompletionEngine } from './completion.mjs';
+import { ModelRouter } from './routing.mjs';
+import { SystemProbe } from './discovery.mjs';
 
 /**
  * Asker

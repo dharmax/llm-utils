@@ -1,7 +1,7 @@
-import { Asker } from '../asker.mjs';
-import { GenerationResult, SessionContext } from '../types.mjs';
-import { ContextCompressor } from '../context/compressor.mjs';
-import { MetricsEngine } from '../logic/metrics.mjs';
+import { Asker } from './asker.mjs';
+import { ContextCompressor } from './context.mjs';
+import { MetricsEngine } from './metrics.mjs';
+import { GenerationResult, SessionContext } from './types.mjs';
 
 export class LLMSession {
   private context: SessionContext;
@@ -16,23 +16,13 @@ export class LLMSession {
     this.metrics = new MetricsEngine();
   }
 
-  /**
-   * High-fidelity interaction with Grounding Loop and Metrics.
-   */
   async prompt(templateName: string, data: any): Promise<GenerationResult> {
     const promptEngine = this.asker.getPromptEngine();
     const { manifest } = await promptEngine.load(templateName);
 
-    if (manifest.preflight) {
-      for (const step of manifest.preflight) {
-        await this.runPreflightStep(step, data);
-      }
-    }
+    for (const step of manifest.preflight ?? []) await this.runPreflightStep(step, data);
 
-    // 1. Continuous Condensation
     this.context.managedContext = ContextCompressor.densify(this.context.history);
-
-    // 2. Main Turn
     const enrichedData = {
       ...data,
       ...this.toolkit,
@@ -40,31 +30,27 @@ export class LLMSession {
       managedContext: this.context.managedContext
     };
 
-    const startTime = Date.now();
+    const startedAt = Date.now();
     const result = await this.asker.prompt(templateName, this.toolkit, enrichedData);
-    const latencyMs = Date.now() - startTime;
+    const latencyMs = Date.now() - startedAt;
 
-    // 3. Record Metrics
     if (result.ok) {
       this.metrics.record(result, latencyMs);
       this.context.metrics = this.metrics.getReport();
-      this.context.history.push({ role: 'user', content: data.inputText || 'Prompt' });
+      this.context.history.push({ role: 'user', content: data.inputText ?? 'Prompt' });
       this.context.history.push({ role: 'ai', content: result.text });
-
-      if (this.context.history.length > 20) {
-        this.context.history = this.context.history.slice(-20);
-      }
+      this.context.history = this.context.history.slice(-20);
     }
 
     return { ...result, latencyMs };
   }
 
-  private async runPreflightStep(step: any, data: any) {
-    void step;
-    void data;
-  }
-
   getContext(): SessionContext {
     return this.context;
+  }
+
+  private async runPreflightStep(step: any, data: any): Promise<void> {
+    void step;
+    void data;
   }
 }
