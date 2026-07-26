@@ -1,4 +1,4 @@
-import type {PromptTemplate} from './types.mjs'
+import type {PromptTemplate} from './types.mts'
 
 export interface TemplateSource {
     fetch?(name: string): Promise<string>
