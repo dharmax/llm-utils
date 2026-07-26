@@ -1,13 +1,13 @@
 import {execFile} from 'node:child_process'
 import {promisify} from 'node:util'
-import {CompletionEngine} from './completion.mjs'
+import {CompletionEngine} from './completion.mts'
 import type {
     CompletionClient,
     ModelInfo,
     ProviderKnowledge,
     ProviderState,
     SystemStatus,
-} from './types.mjs'
+} from './types.mts'
 
 const execFileAsync = promisify(execFile)
 
