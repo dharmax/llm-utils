@@ -1,6 +1,6 @@
 {
   "name": "@dharmax/llm-utils",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Small LLM primitives for typed provider execution, structured responses, routing, prompts, context, sessions, and metrics.",
   "type": "module",
   "main": "./dist/index.mjs",
