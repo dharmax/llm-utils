@@ -21,26 +21,29 @@ export class OpenAIAdapter implements ProviderAdapter {
                 fatal: true,
             })
 
+        const reasoningModel = supportsReasoningEffort(modelId)
         return requestJson({
             providerId: this.id,
             modelId,
-            url: `${config.baseUrl ?? 'https://api.openai.com/v1'}/chat/completions`,
+            url: `${config.baseUrl ?? 'https://api.openai.com/v1'}/responses`,
             headers: {Authorization: `Bearer ${config.apiKey}`},
             body: {
                 model: modelId,
-                messages: [
+                input: [
                     ...(system ? [{role: 'system', content: system}] : []),
                     {role: 'user', content: prompt},
                 ],
-                temperature: options.temperature ?? 0.1,
-                response_format: format === 'json' ? {type: 'json_object'} : undefined,
+                store: false,
+                ...(reasoningModel ? {reasoning: {effort: 'medium'}} : {}),
+                ...(reasoningModel ? {} : {temperature: options.temperature ?? 0.1}),
+                ...(format === 'json' ? {text: {format: {type: 'json_object'}}} : {}),
             },
             signal,
             read: data => ({
-                text: stringAt(data, 'choices', 0, 'message', 'content'),
+                text: openAIOutputText(data),
                 usage: usage(
-                    numberAt(data, 'usage', 'prompt_tokens'),
-                    numberAt(data, 'usage', 'completion_tokens'),
+                    numberAt(data, 'usage', 'input_tokens'),
+                    numberAt(data, 'usage', 'output_tokens'),
                     numberAt(data, 'usage', 'total_tokens'),
                 ),
             }),
@@ -314,6 +317,23 @@ function usage(
         totalTokens,
         available: true,
     }
+}
+
+function openAIOutputText(data: JsonRecord): string {
+    const direct = stringAt(data, 'output_text')
+    if (direct)
+        return direct
+
+    return arrayAt(data, 'output')
+        .flatMap(item => arrayAt(item, 'content'))
+        .filter(part => recordAt(part)?.type === 'output_text')
+        .map(part => stringValue(recordAt(part)?.text))
+        .filter(Boolean)
+        .join('\n')
+}
+
+function supportsReasoningEffort(modelId: string): boolean {
+    return /^(?:gpt-5(?:[.-]|$)|o[1-9](?:[.-]|$))/i.test(modelId)
 }
 
 function recordAt(value: unknown): JsonRecord | undefined {
