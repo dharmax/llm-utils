@@ -10,10 +10,12 @@ import {
   LLMSession,
   LlmMetrics,
   ModelRouter,
+  OpenAIAdapter,
+  parseStructuredJson,
   PromptEngine,
-  ProviderDiscovery
+  ProviderDiscovery,
+  StructuredJsonError
 } from '../dist/index.mjs';
-import { HeuristicContextManager } from '../../context-manager/dist/index.mjs';
 
 class MemoryTemplateSource {
   constructor(entries) {
@@ -48,7 +50,7 @@ class MemoryContextStore {
 }
 
 function registerEchoAdapter(id) {
-  CompletionEngine.registerAdapter({
+  return new CompletionEngine([]).registerAdapter({
     id,
     async generate(options) {
       return {
@@ -70,6 +72,88 @@ function registerEchoAdapter(id) {
   });
 }
 
+test('CompletionEngine owns adapters per instance', async () => {
+  const first = registerEchoAdapter('isolated');
+  const second = new CompletionEngine([]);
+  const model = { id: 'model', providerId: 'isolated' };
+  const config = { id: 'isolated' };
+
+  assert.equal((await first.generate('hello', model, config)).ok, true);
+  const missing = await second.generate('hello', model, config);
+  assert.equal(missing.ok, false);
+  assert.equal(missing.failure.kind, 'unsupported');
+  assert.equal(missing.failure.fatal, true);
+});
+
+test('parseStructuredJson extracts, repairs, and validates model responses', () => {
+  const schema = {
+    safeParse(value) {
+      return value?.answer === 42
+        ? { success: true, data: value }
+        : { success: false, error: { issues: [{ path: ['answer'], message: 'Expected 42' }] } };
+    }
+  };
+
+  assert.deepEqual(
+    parseStructuredJson('```json\n{"answer": 42}\n```', 'answer', schema),
+    { answer: 42 }
+  );
+  assert.deepEqual(
+    parseStructuredJson('{answer: 42}', 'repaired answer', schema),
+    { answer: 42 }
+  );
+  assert.throws(
+    () => parseStructuredJson('not JSON', 'prose'),
+    error => error instanceof StructuredJsonError && error.kind === 'parse_failed'
+  );
+  assert.throws(
+    () => parseStructuredJson('{"answer": 1}', 'wrong answer', schema),
+    error => error instanceof StructuredJsonError
+      && error.kind === 'schema_invalid'
+      && error.message.includes('answer: Expected 42')
+  );
+});
+
+test('provider HTTP failures preserve typed quota evidence', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    error: {
+      code: 'insufficient_quota',
+      message: 'No API credits remain.'
+    }
+  }), {
+    status: 429,
+    headers: {'Content-Type': 'application/json'}
+  });
+
+  try {
+    const completion = new CompletionEngine([new OpenAIAdapter()]);
+    const result = await completion.generate(
+      'hello',
+      {id: 'gpt-test', providerId: 'openai'},
+      {id: 'openai', apiKey: 'test-key'}
+    );
+
+    assert.equal(result.ok, false);
+    assert.deepEqual(result.failure, {
+      kind: 'quota',
+      message: 'No API credits remain.',
+      status: 429,
+      code: 'insufficient_quota',
+      retryable: false,
+      fatal: true,
+      raw: {
+        error: {
+          code: 'insufficient_quota',
+          message: 'No API credits remain.'
+        }
+      }
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('PromptEngine loads multipart templates, parses JSON frontmatter, and renders variables', async () => {
   const engine = new PromptEngine(new MemoryTemplateSource({
     'greeting.system': '--- json\n{"format":"json"}\n---\nSystem rules',
@@ -86,7 +170,7 @@ test('PromptEngine loads multipart templates, parses JSON frontmatter, and rende
 
 test('Asker supports providerState constructor and routes requests through registered adapters', async () => {
   const providerId = 'unit-provider-state';
-  registerEchoAdapter(providerId);
+  const completion = registerEchoAdapter(providerId);
 
   const asker = new Asker({
     providerState: {
@@ -106,7 +190,8 @@ test('Asker supports providerState constructor and routes requests through regis
       },
       routingPolicy: {},
       knowledge: {}
-    }
+    },
+    completion
   });
 
   const result = await asker.ask('ping', 'code-generation', { system: 'be terse' });
@@ -119,7 +204,7 @@ test('Asker supports providerState constructor and routes requests through regis
 
 test('Asker legacy constructor keeps prompt injection behavior', async () => {
   const providerId = 'unit-legacy';
-  registerEchoAdapter(providerId);
+  const completion = registerEchoAdapter(providerId);
 
   const promptEngine = new PromptEngine(new MemoryTemplateSource({
     'draft.system': '--- json\n{"taskType":"code-generation","inject":[{"type":"context_blocks","key":"context","categories":["docs"]}]}\n---\nStay grounded',
@@ -147,7 +232,8 @@ test('Asker legacy constructor keeps prompt injection behavior', async () => {
       }
     ],
     contextManager,
-    promptEngine
+    promptEngine,
+    completion
   );
 
   await asker.refreshMapping([
@@ -173,29 +259,26 @@ test('Asker legacy constructor keeps prompt injection behavior', async () => {
 
 test('Asker accepts a protocol-based context manager from the external package', async () => {
   const providerId = 'unit-protocol';
-  registerEchoAdapter(providerId);
+  const completion = registerEchoAdapter(providerId);
 
   const promptEngine = new PromptEngine(new MemoryTemplateSource({
     'draft.system': '--- json\n{"taskType":"code-generation","inject":[{"type":"context_blocks","key":"context","categories":["docs"],"maxTokens":80,"maxItems":1}]}\n---\nStay grounded',
     'draft.prompt': 'Question: {{ inputText }}\nContext:\n{{ context }}'
   }));
 
-  const contextManager = new HeuristicContextManager(new MemoryContextStore([
-    {
-      id: 'ctx-1',
-      category: 'docs',
-      tags: ['routing'],
-      title: 'Routing Notes',
-      body: 'Prefer the strongest available model for logic-heavy work.'
-    },
-    {
-      id: 'ctx-2',
-      category: 'docs',
-      tags: ['storage'],
-      title: 'Storage Notes',
-      body: 'Separate the protocol from the implementation package.'
+  const contextManager = {
+    async resolve(request) {
+      assert.equal(request.maxItems, 1);
+      return {
+        items: [{
+          id: 'ctx-1',
+          kind: 'knowledge',
+          title: 'Routing Notes',
+          content: 'Prefer the strongest available model for logic-heavy work.'
+        }]
+      };
     }
-  ]));
+  };
 
   const asker = new Asker(
     [{ id: providerId, available: true }],
@@ -208,7 +291,8 @@ test('Asker accepts a protocol-based context manager from the external package',
       }
     ],
     contextManager,
-    promptEngine
+    promptEngine,
+    completion
   );
 
   await asker.refreshMapping([
@@ -233,7 +317,7 @@ test('Asker accepts a protocol-based context manager from the external package',
 
 test('LLMSession records history and metrics across successful turns', async () => {
   const providerId = 'unit-session';
-  registerEchoAdapter(providerId);
+  const completion = registerEchoAdapter(providerId);
 
   const promptEngine = new PromptEngine(new MemoryTemplateSource({
     'reply.system': '--- json\n{"taskType":"default"}\n---\nRespond helpfully',
@@ -259,7 +343,8 @@ test('LLMSession records history and metrics across successful turns', async () 
       routingPolicy: {},
       knowledge: {}
     },
-    promptEngine
+    promptEngine,
+    completion
   });
 
   const session = new LLMSession(asker, { assistantName: 'Helper' });
