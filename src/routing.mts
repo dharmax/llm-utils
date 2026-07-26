@@ -4,7 +4,7 @@ import type {
   ProviderConfig,
   ProviderState,
   TaskType
-} from './types.mjs';
+} from './types.mts';
 
 export interface RouterOptions {
   preferLocal?: boolean;
