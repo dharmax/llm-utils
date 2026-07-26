@@ -1,5 +1,5 @@
 import { PubSub } from '@dharmax/pubsub';
-import { GenerationResult } from './types.mjs';
+import type { GenerationResult } from './types.mjs';
 
 export type MetricsBucket = 'minute' | 'hour' | 'day' | 'week' | 'month';
 export type MetricsGroupBy = 'total' | 'provider' | 'model';

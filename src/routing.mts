@@ -1,4 +1,10 @@
-import { ModelCapabilities, ModelInfo, ProviderConfig, ProviderState, TaskType } from './types.mjs';
+import type {
+  ModelCapabilities,
+  ModelInfo,
+  ProviderConfig,
+  ProviderState,
+  TaskType
+} from './types.mjs';
 
 export interface RouterOptions {
   preferLocal?: boolean;
