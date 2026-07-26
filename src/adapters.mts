@@ -4,7 +4,7 @@ import type {
     LlmFailure,
     ProviderAdapter,
     ProviderId,
-} from './types.mjs'
+} from './types.mts'
 
 type JsonRecord = Record<string, unknown>
 
