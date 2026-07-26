@@ -57,6 +57,10 @@ console.log(result.text)
 `CompletionEngine` has no static registry. Separate instances cannot leak custom
 adapters or test state into each other.
 
+The package ships its TypeScript source as its type entrypoint and Bun runtime
+entrypoint; Node uses the built ESM bundle. Exact Git dependencies therefore work
+without lifecycle scripts or committed build artifacts.
+
 ## Structured JSON
 
 ```ts
