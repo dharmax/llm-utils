@@ -1,66 +1,104 @@
-import { AnthropicAdapter, GoogleAdapter, OllamaProvider, OpenAIAdapter } from './adapters.mjs';
-import { GenerateOptions, GenerationResult, ModelInfo, ProviderAdapter, ProviderConfig } from './types.mjs';
+import {
+    AnthropicAdapter,
+    GoogleAdapter,
+    OllamaProvider,
+    OpenAIAdapter,
+} from './adapters.mjs'
+import type {
+    GenerateOptions,
+    GenerationResult,
+    LlmFailure,
+    ModelInfo,
+    ProviderAdapter,
+    ProviderConfig,
+} from './types.mjs'
 
 export interface CompletionOptions {
-  system?: string;
-  temperature?: number;
-  format?: 'text' | 'json';
-  signal?: AbortSignal | null;
+    system?: string
+    temperature?: number
+    format?: 'text' | 'json'
+    signal?: AbortSignal | null
+}
+
+export function builtInAdapters(): ProviderAdapter[] {
+    return [
+        new OllamaProvider(),
+        new OpenAIAdapter(),
+        new GoogleAdapter(),
+        new AnthropicAdapter(),
+    ]
 }
 
 export class CompletionEngine {
-  private static adapters: Map<string, ProviderAdapter> = new Map([
-    ['ollama', new OllamaProvider()],
-    ['openai', new OpenAIAdapter()],
-    ['google', new GoogleAdapter()],
-    ['anthropic', new AnthropicAdapter()]
-  ]);
+    private readonly adapters = new Map<string, ProviderAdapter>()
 
-  static registerAdapter(adapter: ProviderAdapter): void {
-    this.adapters.set(adapter.id, adapter);
-  }
-
-  static getRegisteredProviderIds(): string[] {
-    return Array.from(this.adapters.keys());
-  }
-
-  static async generate(
-    prompt: string,
-    model: ModelInfo,
-    config: ProviderConfig,
-    options: CompletionOptions = {}
-  ): Promise<GenerationResult> {
-    const adapter = this.adapters.get(model.providerId);
-    if (!adapter) {
-      return {
-        text: '',
-        ok: false,
-        error: `Unsupported provider for completion: ${model.providerId}`,
-        err: `Unsupported provider for completion: ${model.providerId}`,
-        model: { providerId: model.providerId, modelId: model.id }
-      };
+    constructor(adapters: Iterable<ProviderAdapter> = builtInAdapters()) {
+        for (const adapter of adapters)
+            this.registerAdapter(adapter)
     }
 
-    const generateOptions: GenerateOptions = {
-      modelId: model.id,
-      prompt,
-      system: options.system,
-      config,
-      format: options.format,
-      signal: options.signal
-    };
+    registerAdapter(adapter: ProviderAdapter): this {
+        this.adapters.set(adapter.id, adapter)
+        return this
+    }
 
-    try {
-      return await adapter.generate(generateOptions);
-    } catch (error: any) {
-      const message = error?.message ?? String(error);
-      return {
+    getRegisteredProviderIds(): string[] {
+        return [...this.adapters.keys()]
+    }
+
+    async generate(
+        prompt: string,
+        model: ModelInfo,
+        config: ProviderConfig,
+        options: CompletionOptions = {},
+    ): Promise<GenerationResult> {
+        const adapter = this.adapters.get(model.providerId)
+        if (!adapter)
+            return failedGeneration(model, {
+                kind: 'unsupported',
+                message: `Unsupported provider for completion: ${model.providerId}`,
+                retryable: false,
+                fatal: true,
+            })
+
+        const generateOptions: GenerateOptions = {
+            modelId: model.id,
+            prompt,
+            config,
+            ...(options.system === undefined ? {} : {system: options.system}),
+            ...(options.temperature === undefined ? {} : {temperature: options.temperature}),
+            ...(options.format === undefined ? {} : {format: options.format}),
+            ...(options.signal === undefined ? {} : {signal: options.signal}),
+        }
+
+        try {
+            return await adapter.generate(generateOptions)
+        } catch (cause) {
+            return failedGeneration(model, {
+                kind: 'provider',
+                message: `Adapter failed unexpectedly: ${errorMessage(cause)}`,
+                retryable: false,
+                fatal: true,
+                raw: cause,
+            })
+        }
+    }
+}
+
+function failedGeneration(model: ModelInfo, failure: LlmFailure): GenerationResult {
+    return {
         text: '',
         ok: false,
-        error: `Fatal adapter error: ${message}`,
-        err: `Fatal adapter error: ${message}`,
-        model: { providerId: model.providerId, modelId: model.id }
-      };
+        failure,
+        error: failure.message,
+        err: failure.message,
+        model: {
+            providerId: model.providerId,
+            modelId: model.id,
+        },
     }
-  }
+}
+
+function errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error)
 }
