@@ -1,6 +1,7 @@
 export * from './types.mjs';
 export * from './asker.mjs';
 export * from './completion.mjs';
+export * from './structured-json.mjs';
 export * from './routing.mjs';
 export * from './prompts.mjs';
 export * from './context.mjs';
