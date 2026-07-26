@@ -1,7 +1,7 @@
 {
   "name": "@dharmax/llm-utils",
-  "version": "0.1.1",
-  "description": "Small LLM utility primitives for routing, prompts, context, sessions, metrics, and provider adapters.",
+  "version": "0.2.0",
+  "description": "Small LLM primitives for typed provider execution, structured responses, routing, prompts, context, sessions, and metrics.",
   "type": "module",
   "main": "./dist/index.mjs",
   "types": "./dist/index.d.mts",
@@ -18,8 +18,10 @@
   ],
   "scripts": {
     "build": "rm -rf dist && esbuild src/index.mts --bundle --platform=node --format=esm --outfile=dist/index.mjs --sourcemap --resolve-extensions=.mts,.mtsx,.js,.json --external:node:fs/promises --external:node:path --external:node:child_process --external:node:util && tsc --emitDeclarationOnly --outDir dist",
-    "build:context-manager": "npm --prefix ../context-manager run build",
-    "test": "npm run build && npm run build:context-manager && node --test tests/**/*.test.mjs"
+    "prepare": "npm run build",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm run test",
+    "test": "npm run build && node --test tests/**/*.test.mjs"
   },
   "keywords": [
     "llm",
@@ -39,11 +41,12 @@
   },
   "homepage": "https://github.com/dharmax/llm-utils#readme",
   "dependencies": {
-    "@dharmax/pubsub": "^1.2.0"
+    "@dharmax/pubsub": "^1.2.0",
+    "jsonrepair": "^3.14.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "esbuild": "^0.28.0",
-    "typescript": "^5.0.0"
+    "typescript": "^6.0.3"
   }
 }

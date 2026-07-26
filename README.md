@@ -3,7 +3,9 @@
 Small TypeScript primitives for LLM-powered tools:
 
 - `Asker` executes direct or template-backed requests.
-- `CompletionEngine` dispatches requests through provider adapters.
+- `CompletionEngine` owns and dispatches provider adapters per client instance.
+- Provider failures preserve kind, HTTP status, provider code, retryability, and fatality.
+- `parseStructuredJson` extracts, repairs, and validates model JSON.
 - `ModelRouter` scores and selects models.
 - `PromptEngine` loads `.system` and `.prompt` template parts.
 - `ContextManager` and `PromptContextManager` support lightweight prompt injection.
@@ -22,34 +24,51 @@ npm install @dharmax/llm-utils
 ## Direct Request
 
 ```ts
-import { Asker, CompletionEngine } from '@dharmax/llm-utils';
+import {Asker, CompletionEngine} from '@dharmax/llm-utils'
 
-CompletionEngine.registerAdapter({
-  id: 'mock',
-  async generate(options) {
-    return {
-      text: `Echo: ${options.prompt}`,
-      ok: true,
-      model: { providerId: 'mock', modelId: options.modelId }
-    };
-  }
-});
+const completion = new CompletionEngine([]).registerAdapter({
+    id: 'mock',
+    async generate(options) {
+        return {
+            text: `Echo: ${options.prompt}`,
+            ok: true,
+            model: {providerId: 'mock', modelId: options.modelId},
+        }
+    },
+})
 
 const asker = new Asker({
-  providerState: {
-    providers: {
-      mock: {
-        id: 'mock',
-        available: true,
-        models: [{ id: 'mock-1', providerId: 'mock', quality: 'medium' }]
-      }
-    }
-  }
-});
+    providerState: {
+        providers: {
+            mock: {
+                id: 'mock',
+                available: true,
+                models: [{id: 'mock-1', providerId: 'mock', quality: 'medium'}],
+            },
+        },
+    },
+    completion,
+})
 
-const result = await asker.ask('Summarize this file', 'summarization');
-console.log(result.text);
+const result = await asker.ask('Summarize this file', 'summarization')
+console.log(result.text)
 ```
+
+`CompletionEngine` has no static registry. Separate instances cannot leak custom
+adapters or test state into each other.
+
+## Structured JSON
+
+```ts
+import {parseStructuredJson} from '@dharmax/llm-utils'
+
+const data = parseStructuredJson(rawReply, 'book analysis', zodSchema)
+```
+
+The parser accepts direct JSON, fenced JSON, embedded objects/arrays, and
+deterministically repairable JSON-shaped text. It does not turn arbitrary prose
+into a valid JSON string. The schema only needs a `safeParse()` method, so the
+package does not force a validation library on consumers.
 
 ## Templates And Context
 
@@ -99,7 +118,8 @@ console.log(metrics.totals());
 The root export intentionally contains the package capabilities without exposing the old directory structure:
 
 - request/session: `Asker`, `LLMSession`
-- completion/adapters: `CompletionEngine`, `OpenAIAdapter`, `AnthropicAdapter`, `GoogleAdapter`, `OllamaProvider`
+- completion/adapters: `CompletionEngine`, typed `LlmFailure`, `OpenAIAdapter`, `AnthropicAdapter`, `GoogleAdapter`, `OllamaProvider`
+- structured responses: `parseStructuredJson`, `StructuredJsonError`
 - routing: `ModelRouter`, `RouterHeuristics`
 - prompts/context: `PromptEngine`, `ContextManager`, `ContextCompressor`
 - metrics: `LlmMetrics`, `MetricsEngine`, `InMemoryMetricsStore`

@@ -66,11 +66,11 @@ export class ModelRouter {
 
     if (options.preferLocal) {
       const local = available.filter((candidate) => candidate.local || candidate.providerId === 'ollama');
-      if (local.length) return local[0];
+      if (local.length) return local[0] ?? null;
       if (!options.allowWeak) return null;
     }
 
-    return available[0];
+    return available[0] ?? null;
   }
 
   private static getTaskWeights(taskClass: string): Partial<ModelCapabilities> {
@@ -119,6 +119,7 @@ export class RouterHeuristics {
 
   static scoreModel(model: ModelInfo, task: TaskType): { fitScore: number; reasons: string[] } {
     const scored = ModelRouter.scoreModels([], task, [model])[0];
+    if (!scored) return { fitScore: 0, reasons: [] };
     return {
       fitScore: scored.fitScore ?? 0,
       reasons: scored.fitReasons ?? []
