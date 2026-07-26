@@ -164,7 +164,11 @@ export class LlmMetrics {
     return [...groupEvents(this.list(query), (event) => `${event.providerId}::${event.modelId}`).entries()]
       .map(([key, events]) => {
         const [providerId, modelId] = key.split('::');
-        return { providerId, modelId, metrics: aggregateEvents(events) };
+        return {
+          providerId: providerId ?? '',
+          modelId: modelId ?? '',
+          metrics: aggregateEvents(events)
+        };
       });
   }
 
@@ -178,6 +182,7 @@ export class LlmMetrics {
     return [...buckets.entries()]
       .map(([key, events]) => {
         const first = events[0];
+        if (!first) return null;
         const point: MetricsTimeseriesPoint = {
           ...resolveBucketRange(first.timestamp, bucket),
           metrics: aggregateEvents(events)
@@ -189,6 +194,7 @@ export class LlmMetrics {
         }
         return { key, point };
       })
+      .filter((entry): entry is { key: string; point: MetricsTimeseriesPoint } => entry !== null)
       .sort((left, right) => left.key.localeCompare(right.key))
       .map(({ point }) => point);
   }
@@ -250,10 +256,10 @@ export function normalizeMetricEvent(event: Omit<LlmMetricEvent, 'totalTokens'> 
     latencyMs: Math.max(0, Number(event.latencyMs ?? 0)),
     success: Boolean(event.success),
     error: event.error ?? event.err ?? null,
-    taskClass: event.taskClass,
-    capability: event.capability,
+    ...(event.taskClass === undefined ? {} : { taskClass: event.taskClass }),
+    ...(event.capability === undefined ? {} : { capability: event.capability }),
     costUsd: Number.isFinite(event.costUsd) ? Number(event.costUsd) : 0,
-    metadata: event.metadata ? { ...event.metadata } : undefined
+    ...(event.metadata ? { metadata: { ...event.metadata } } : {})
   };
 }
 
