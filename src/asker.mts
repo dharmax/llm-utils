@@ -9,8 +9,8 @@ import type {
     ProviderId,
     SystemStatus,
     TaskType,
-} from './types.mjs'
-import {PromptEngine} from './prompts.mjs'
+} from './types.mts'
+import {PromptEngine} from './prompts.mts'
 import {
     type ContextHistoryItem,
     ContextManager,
@@ -20,10 +20,10 @@ import {
     LegacyContextManagerAdapter,
     type PromptContextManager,
     renderContextResult,
-} from './context.mjs'
-import {CompletionEngine} from './completion.mjs'
-import {ModelRouter} from './routing.mjs'
-import {SystemProbe} from './discovery.mjs'
+} from './context.mts'
+import {CompletionEngine} from './completion.mts'
+import {ModelRouter} from './routing.mts'
+import {SystemProbe} from './discovery.mts'
 
 type PromptData = Record<string, unknown>
 
