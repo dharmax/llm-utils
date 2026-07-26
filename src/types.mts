@@ -1,5 +1,5 @@
-import type {CompletionOptions} from './completion.mjs'
-import type {PromptEngine} from './prompts.mjs'
+import type {CompletionOptions} from './completion.mts'
+import type {PromptEngine} from './prompts.mts'
 
 export type ProviderId = 'google' | 'openai' | 'anthropic' | 'ollama' | string
 

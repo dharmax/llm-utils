@@ -172,3 +172,4 @@ export class ContextCompressor {
     return history.map((turn) => `[${turn.role.toUpperCase()}] ${this.compress(turn.content, 50)}`).join('\n');
   }
 }
+

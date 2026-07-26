@@ -1,7 +1,7 @@
-import {Asker} from './asker.mjs'
-import {ContextCompressor} from './context.mjs'
-import {MetricsEngine} from './metrics.mjs'
-import type {GenerationResult, SessionContext} from './types.mjs'
+import {Asker} from './asker.mts'
+import {ContextCompressor} from './context.mts'
+import {MetricsEngine} from './metrics.mts'
+import type {GenerationResult, SessionContext} from './types.mts'
 
 export class LLMSession {
     private context: SessionContext
