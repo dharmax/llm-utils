@@ -2,6 +2,7 @@ export * from './types.mts';
 export * from './asker.mts';
 export * from './completion.mts';
 export * from './structured-json.mts';
+export * from './provider-circuit.mts';
 export * from './routing.mts';
 export * from './prompts.mts';
 export * from './context.mts';

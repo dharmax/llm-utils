@@ -5,7 +5,7 @@ Small TypeScript primitives for LLM-powered tools:
 - `Asker` executes direct or template-backed requests.
 - `CompletionEngine` owns and dispatches provider adapters per client instance.
 - Provider failures preserve kind, HTTP status, provider code, retryability, and fatality.
-- `parseStructuredJson` extracts, repairs, and validates model JSON.
+- `requestStructuredJson` executes once, then extracts, repairs, and validates model JSON.
 - `ModelRouter` scores and selects models.
 - `PromptEngine` loads `.system` and `.prompt` template parts.
 - `ContextManager` and `PromptContextManager` support lightweight prompt injection.
@@ -54,6 +54,10 @@ const result = await asker.ask('Summarize this file', 'summarization')
 console.log(result.text)
 ```
 
+Use `asker.askExact(prompt, {providerId, modelId})` or
+`asker.promptExact(templateName, data, {providerId, modelId})` when an
+application—not the router—owns model selection.
+
 `CompletionEngine` has no static registry. Separate instances cannot leak custom
 adapters or test state into each other.
 
@@ -64,15 +68,28 @@ without lifecycle scripts or committed build artifacts.
 ## Structured JSON
 
 ```ts
-import {parseStructuredJson} from '@dharmax/llm-utils'
+import {requestStructuredJson} from '@dharmax/llm-utils'
 
-const data = parseStructuredJson(rawReply, 'book analysis', zodSchema)
+const result = await requestStructuredJson(
+    () => asker.promptExact('book-analysis', input, target, {format: 'json'}),
+    'book analysis',
+    zodSchema,
+)
+if (!result.ok)
+    throw new Error(result.message)
+console.log(result.data)
 ```
 
 The parser accepts direct JSON, fenced JSON, embedded objects/arrays, and
 deterministically repairable JSON-shaped text. It does not turn arbitrary prose
 into a valid JSON string. The schema only needs a `safeParse()` method, so the
 package does not force a validation library on consumers.
+
+## Fatal-provider circuit
+
+`ProviderCircuit` wraps requests and opens only when a typed provider failure is
+marked `fatal`. Later calls return a typed failure without contacting that
+provider. Create one circuit per client or application run; no state is global.
 
 ## Templates And Context
 
@@ -123,7 +140,8 @@ The root export intentionally contains the package capabilities without exposing
 
 - request/session: `Asker`, `LLMSession`
 - completion/adapters: `CompletionEngine`, typed `LlmFailure`, `OpenAIAdapter`, `AnthropicAdapter`, `GoogleAdapter`, `OllamaProvider`
-- structured responses: `parseStructuredJson`, `StructuredJsonError`
+- structured responses: `requestStructuredJson`, `parseStructuredJson`, `StructuredJsonError`
+- request lifecycle: `ProviderCircuit`
 - routing: `ModelRouter`, `RouterHeuristics`
 - prompts/context: `PromptEngine`, `ContextManager`, `ContextCompressor`
 - metrics: `LlmMetrics`, `MetricsEngine`, `InMemoryMetricsStore`

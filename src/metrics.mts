@@ -67,6 +67,11 @@ export interface MetricsEventsOptions {
   origin?: string;
 }
 
+export interface UsagePricing {
+  inputCostPerMillionTokensUsd?: number;
+  outputCostPerMillionTokensUsd?: number;
+}
+
 const EMPTY_AGGREGATE: AggregateMetrics = {
   calls: 0,
   successes: 0,
@@ -125,6 +130,7 @@ export class InMemoryMetricsStore implements MetricsStore {
   }
 }
 
+/** Stores and aggregates normalized request metrics without assuming pricing. */
 export class LlmMetrics {
   readonly store: MetricsStore;
   readonly bus: PubSub | null;
@@ -200,6 +206,7 @@ export class LlmMetrics {
   }
 }
 
+/** Compatibility façade that records successful generation usage. */
 export class MetricsEngine {
   readonly store: MetricsStore;
   readonly metrics: LlmMetrics;
@@ -209,7 +216,7 @@ export class MetricsEngine {
     this.metrics = new LlmMetrics(store);
   }
 
-  record(result: GenerationResult, latencyMs: number): void {
+  record(result: GenerationResult, latencyMs: number, pricing?: UsagePricing): void {
     if (!result.ok || !result.usage) return;
     this.metrics.record({
       timestamp: new Date().toISOString(),
@@ -221,7 +228,7 @@ export class MetricsEngine {
       latencyMs,
       success: result.ok,
       error: result.error ?? result.err ?? null,
-      costUsd: estimateCost(result)
+      costUsd: calculateUsageCost(result.usage, pricing)
     });
   }
 
@@ -326,16 +333,17 @@ function resolveBucketRange(timestamp: string, bucket: MetricsBucket): { bucketS
   return { bucketStart: start.toISOString(), bucketEnd: end.toISOString() };
 }
 
-function estimateCost(result: GenerationResult): number {
-  if (!result.usage || result.model.providerId === 'ollama') return 0;
-  const usage = result.usage;
-  if (result.model.modelId.includes('gpt-4o')) {
-    return usage.promptTokens * 0.005 / 1000 + usage.completionTokens * 0.015 / 1000;
-  }
-  if (result.model.modelId.includes('claude-3-5')) {
-    return usage.promptTokens * 0.003 / 1000 + usage.completionTokens * 0.015 / 1000;
-  }
-  return 0;
+/**
+ * Prices provider-reported usage with caller-supplied rates. Unknown pricing is
+ * deliberately zero instead of relying on stale hard-coded model prices.
+ */
+export function calculateUsageCost(
+  usage: GenerationResult['usage'],
+  pricing?: UsagePricing,
+): number {
+  if (!usage || !pricing) return 0;
+  return usage.promptTokens / 1_000_000 * (pricing.inputCostPerMillionTokensUsd ?? 0)
+    + usage.completionTokens / 1_000_000 * (pricing.outputCostPerMillionTokensUsd ?? 0);
 }
 
 function round(value: number, digits: number): number {

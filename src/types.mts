@@ -59,6 +59,12 @@ export interface Usage {
     available: boolean
 }
 
+/** Exact provider/model selection, bypassing heuristic routing. */
+export interface ModelTarget {
+    providerId: ProviderId
+    modelId: string
+}
+
 export type LlmFailureKind =
     | 'authentication'
     | 'quota'
@@ -142,6 +148,13 @@ export interface AskerOptions {
     providerState: ProviderState
     promptEngine?: PromptEngine
     completion?: CompletionClient
+}
+
+export interface ExactRequestOptions {
+    system?: string
+    format?: 'text' | 'json'
+    temperature?: number
+    signal?: AbortSignal | null
 }
 
 export interface ProviderAdapter {
