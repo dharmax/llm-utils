@@ -3,8 +3,10 @@ import type {
     CompletionClient,
     GenerationResult,
     InteractionTurn,
+    ExactRequestOptions,
     ModelCapabilities,
     ModelInfo,
+    ModelTarget,
     ProviderConfig,
     ProviderId,
     SystemStatus,
@@ -36,6 +38,10 @@ type ContextInjection = {
     hints?: ContextRequest['hints']
 }
 
+/**
+ * High-level request client for routed or exact model execution. Provider,
+ * adapter, prompt, and routing state is owned by this instance.
+ */
 export class Asker {
     private providerConfigs = new Map<ProviderId, ProviderConfig>()
     private taskTypes = new Map<string, TaskType>()
@@ -171,6 +177,52 @@ export class Asker {
         return result
     }
 
+    /**
+     * Executes against one exact provider/model pair. Applications with explicit
+     * model roles should use this instead of reaching into CompletionEngine.
+     */
+    async askExact(
+        prompt: string,
+        target: ModelTarget,
+        options: ExactRequestOptions = {},
+    ): Promise<GenerationResult> {
+        const config = this.router
+            ? this.router.getProviderConfig(target.providerId)
+            : this.providerConfigs.get(target.providerId)
+        if (!config) {
+            return configurationFailure(
+                target,
+                `Provider configuration missing for ${target.providerId}.`,
+            )
+        }
+        return this.completion.generate(
+            prompt,
+            {id: target.modelId, providerId: target.providerId},
+            config,
+            options,
+        )
+    }
+
+    /** Loads, renders, and executes a template against an exact model target. */
+    async promptExact(
+        templateName: string,
+        data: PromptData,
+        target: ModelTarget,
+        options: ExactRequestOptions = {},
+    ): Promise<GenerationResult> {
+        const {content, manifest} = await this.promptEngine.load(templateName)
+        const system = options.system
+            ?? (typeof manifest.system === 'string' ? manifest.system : undefined)
+        return this.askExact(
+            this.promptEngine.render(content, data),
+            target,
+            {
+                ...options,
+                ...(system === undefined ? {} : {system}),
+            },
+        )
+    }
+
     private selectModel(
         taskTypeId: string,
         options: Partial<InteractionTurn>,
@@ -229,6 +281,24 @@ export class Asker {
         }
 
         return ''
+    }
+}
+
+function configurationFailure(
+    target: ModelTarget,
+    message: string,
+): GenerationResult {
+    return {
+        text: '',
+        ok: false,
+        failure: {
+            kind: 'configuration',
+            message,
+            retryable: false,
+            fatal: true,
+        },
+        error: message,
+        model: target,
     }
 }
 

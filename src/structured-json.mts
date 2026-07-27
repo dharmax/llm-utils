@@ -1,4 +1,5 @@
 import {jsonrepair} from 'jsonrepair'
+import type {GenerationResult, LlmFailure} from './types.mts'
 
 export type StructuredJsonFailure = 'parse_failed' | 'schema_invalid'
 
@@ -9,6 +10,26 @@ type SchemaResult<T> =
 export type StructuredJsonSchema<T> = {
     safeParse(value: unknown): SchemaResult<T>
 }
+
+export type StructuredGenerationFailureKind =
+    | StructuredJsonFailure
+    | 'model_failed'
+
+export type StructuredGenerationResult<T> =
+    | {
+        ok: true
+        data: T
+        raw: string
+        generation: GenerationResult
+    }
+    | {
+        ok: false
+        kind: StructuredGenerationFailureKind
+        message: string
+        raw?: string
+        failure?: LlmFailure
+        generation?: GenerationResult
+    }
 
 export class StructuredJsonError extends Error {
     constructor(
@@ -44,6 +65,61 @@ export function parseStructuredJson<T = unknown>(
         `Model JSON reply for ${label} failed schema validation:\n${formatValidationError(result.error)}`,
         {cause: result.error},
     )
+}
+
+/**
+ * Runs one model request and validates its structured response. Deterministic
+ * JSON repair is included; another paid model call is deliberately not.
+ */
+export async function requestStructuredJson<T>(
+    execute: () => Promise<GenerationResult>,
+    label: string,
+    schema?: StructuredJsonSchema<T>,
+): Promise<StructuredGenerationResult<T>> {
+    let generation: GenerationResult
+    try {
+        generation = await execute()
+    } catch (cause) {
+        return {
+            ok: false,
+            kind: 'model_failed',
+            message: cause instanceof Error ? cause.message : String(cause),
+        }
+    }
+    if (!generation.ok) {
+        return {
+            ok: false,
+            kind: 'model_failed',
+            message: generation.failure?.message
+                ?? generation.error
+                ?? 'Model request failed.',
+            ...(generation.failure ? {failure: generation.failure} : {}),
+            generation,
+        }
+    }
+    try {
+        return {
+            ok: true,
+            data: parseStructuredJson(generation.text, label, schema),
+            raw: generation.text,
+            generation,
+        }
+    } catch (error) {
+        const structured = error instanceof StructuredJsonError
+            ? error
+            : new StructuredJsonError(
+                'parse_failed',
+                error instanceof Error ? error.message : String(error),
+                {cause: error},
+            )
+        return {
+            ok: false,
+            kind: structured.kind,
+            message: structured.message,
+            raw: generation.text,
+            generation,
+        }
+    }
 }
 
 function parseJsonish(raw: string, label: string): unknown {

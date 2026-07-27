@@ -29,6 +29,7 @@ export function builtInAdapters(): ProviderAdapter[] {
     ]
 }
 
+/** Dispatches generation to instance-owned provider adapters. */
 export class CompletionEngine {
     private readonly adapters = new Map<string, ProviderAdapter>()
 
