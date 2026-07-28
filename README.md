@@ -69,23 +69,25 @@ without lifecycle scripts or committed build artifacts.
 ## Structured JSON
 
 ```ts
-import {requestStructuredJson, z} from '@dharmax/llm-utils'
+import {z} from '@dharmax/llm-utils'
 
 const schema = z.object({summary: z.string()})
-const result = await requestStructuredJson({
-    label: 'book analysis',
-    schema,
-    execute: request => asker.promptExact(
-        'book-analysis',
-        input,
-        target,
-        {format: request.responseFormat},
-    ),
-})
+const result = await asker.askJson(
+    'Summarize the book as JSON.',
+    'book-analysis',
+    {
+        schema,
+    },
+)
 if (!result.ok)
     throw new Error(result.message)
 console.log(result.data)
 ```
+
+`asker.promptJson(templateName, data, {schema})` provides the same
+behavior for prompt templates. Both methods infer `result.data` from the Zod
+schema, select the appropriate JSON response format, repair common malformed
+JSON locally, and validate before returning.
 
 The package owns Zod 4 and re-exports `z`. It converts safely representable Zod
 schemas to provider JSON Schema, accepts an explicit provider-schema override,

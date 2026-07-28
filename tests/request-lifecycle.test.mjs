@@ -5,18 +5,17 @@ import {
     CompletionEngine,
     ProviderCircuit,
     calculateUsageCost,
-    requestStructuredJson,
     z,
 } from '../dist/index.mjs'
 
-test('exact structured requests execute and validate once', async () => {
+test('Asker.askJson executes and validates once with an inferred schema result', async () => {
     let calls = 0
     const completion = new CompletionEngine([]).registerAdapter({
         id: 'mock',
         async generate(options) {
             calls += 1
             return {
-                text: '```json\\n{\"value\": 7}\\n```',
+                text: '```json\n{"value": 7}\n```',
                 ok: true,
                 model: {providerId: 'mock', modelId: options.modelId},
             }
@@ -26,11 +25,11 @@ test('exact structured requests execute and validate once', async () => {
         providerState: {providers: {mock: {id: 'mock'}}},
         completion,
     })
-    const result = await requestStructuredJson(
-        () => asker.askExact('Return JSON.', {providerId: 'mock', modelId: 'exact'}),
-        'test',
-        z.object({value: z.literal(7)}),
-    )
+    const result = await asker.askJson('Return JSON.', 'test', {
+        schema: z.object({value: z.literal(7)}),
+        providerId: 'mock',
+        modelId: 'exact',
+    })
 
     assert.equal(result.ok, true)
     assert.equal(result.data.value, 7)

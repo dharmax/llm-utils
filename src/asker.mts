@@ -12,6 +12,7 @@ import type {
     SystemStatus,
     TaskType,
 } from './types.mts'
+import type {ZodType} from 'zod'
 import {PromptEngine} from './prompts.mts'
 import {
     type ContextHistoryItem,
@@ -26,8 +27,22 @@ import {
 import {CompletionEngine} from './completion.mts'
 import {ModelRouter} from './routing.mts'
 import {SystemProbe} from './discovery.mts'
+import {
+    requestStructuredJson,
+    type StructuredGenerationResult,
+    type StructuredOutputOptions,
+} from './structured-json.mts'
 
 type PromptData = Record<string, unknown>
+type JsonRoot = Record<string, unknown> | unknown[]
+
+export type AskerJsonOptions<T> =
+    & Omit<Partial<InteractionTurn>, 'format' | 'prompt'>
+    & StructuredOutputOptions
+    & {
+        label?: string
+        schema?: ZodType<T>
+    }
 
 type ContextInjection = {
     type: 'context_blocks'
@@ -119,11 +134,13 @@ export class Asker {
         templateName: string,
         toolkit: PromptData,
         data: PromptData,
+        options?: Partial<InteractionTurn>,
     ): Promise<GenerationResult>
     async prompt(
         turnOrTemplateName: InteractionTurn | string,
         toolkit: PromptData = {},
         data: PromptData = {},
+        options: Partial<InteractionTurn> = {},
     ): Promise<GenerationResult> {
         if (typeof turnOrTemplateName !== 'string')
             return this.ask(turnOrTemplateName.prompt, 'default', turnOrTemplateName)
@@ -141,7 +158,10 @@ export class Asker {
         const taskType = stringValue(data.taskType)
             || stringValue(manifest.taskType)
             || 'default'
-        return this.ask(finalPrompt, taskType, {system: stringValue(manifest.system)})
+        return this.ask(finalPrompt, taskType, {
+            ...options,
+            system: options.system ?? stringValue(manifest.system),
+        })
     }
 
     async ask(
@@ -175,6 +195,58 @@ export class Asker {
         })
         result.response = result.text
         return result
+    }
+
+    async askJson<T = JsonRoot>(
+        prompt: string,
+        taskTypeId: string,
+        options: AskerJsonOptions<T> = {},
+    ): Promise<StructuredGenerationResult<T>> {
+        const {
+            label = taskTypeId,
+            schema,
+            providerSchema,
+            schemaName,
+            strict,
+            ...askOptions
+        } = options
+        return requestStructuredJson<T>({
+            label,
+            ...(schema ? {schema} : {}),
+            ...(providerSchema ? {providerSchema} : {}),
+            ...(schemaName ? {schemaName} : {}),
+            ...(strict === undefined ? {} : {strict}),
+            execute: request => this.ask(prompt, taskTypeId, {
+                ...askOptions,
+                format: request.responseFormat,
+            }),
+        })
+    }
+
+    async promptJson<T = JsonRoot>(
+        templateName: string,
+        data: PromptData,
+        options: AskerJsonOptions<T> = {},
+    ): Promise<StructuredGenerationResult<T>> {
+        const {
+            label = templateName,
+            schema,
+            providerSchema,
+            schemaName,
+            strict,
+            ...promptOptions
+        } = options
+        return requestStructuredJson<T>({
+            label,
+            ...(schema ? {schema} : {}),
+            ...(providerSchema ? {providerSchema} : {}),
+            ...(schemaName ? {schemaName} : {}),
+            ...(strict === undefined ? {} : {strict}),
+            execute: request => this.prompt(templateName, {}, data, {
+                ...promptOptions,
+                format: request.responseFormat,
+            }),
+        })
     }
 
     /**

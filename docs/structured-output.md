@@ -4,6 +4,22 @@
 retain prompt wording, model selection, budgets, provider policy, journals, and
 application-specific schemas.
 
+## Asker API
+
+Use structured output through the normal client:
+
+```ts
+const result = await asker.askJson('Return an answer as JSON.', 'analysis', {
+    schema: z.object({answer: z.string()}),
+})
+```
+
+For templates, use `asker.promptJson(templateName, data, {schema})`. Both
+methods wrap `ask` or `prompt`, infer `result.data` from the schema, choose JSON
+transport, repair the response locally, and validate it.
+`requestStructuredJson` remains the lower-level API for applications that need
+custom correction orchestration.
+
 ## Validation and provider schemas
 
 Import `z` from this package:

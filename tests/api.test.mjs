@@ -197,6 +197,57 @@ test('Asker supports providerState constructor and routes requests through regis
   assert.deepEqual(result.model, { providerId, modelId: 'model-1' });
 });
 
+test('Asker.promptJson renders, requests JSON, repairs, and validates', async () => {
+  const providerId = 'unit-json';
+  let request;
+  const completion = new CompletionEngine([]).registerAdapter({
+    id: providerId,
+    async generate(options) {
+      request = options;
+      return {
+        text: 'Result:\n```json\n{answer: 42}\n```',
+        ok: true,
+        model: {providerId, modelId: options.modelId}
+      };
+    }
+  });
+  const promptEngine = new PromptEngine(new MemoryTemplateSource({
+    'answer.system': '--- json\n{"taskType":"code-generation"}\n---\nReturn one answer',
+    'answer.prompt': 'Question: {{ question }}'
+  }));
+  const asker = new Asker({
+    providerState: {
+      providers: {
+        [providerId]: {
+          id: providerId,
+          available: true,
+          models: [{
+            id: 'json-model',
+            providerId,
+            quality: 'high',
+            capabilities: {logic: 0.9, strategy: 0.7}
+          }]
+        }
+      }
+    },
+    promptEngine,
+    completion
+  });
+
+  const result = await asker.promptJson('answer', {
+    question: 'What is six times seven?',
+    taskType: 'code-generation'
+  }, {
+    schema: z.object({answer: z.literal(42)})
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.data, {answer: 42});
+  assert.equal(request.prompt, 'Question: What is six times seven?');
+  assert.equal(request.system, 'Return one answer');
+  assert.equal(request.format.type, 'json_schema');
+});
+
 test('Asker legacy constructor keeps prompt injection behavior', async () => {
   const providerId = 'unit-legacy';
   const completion = registerEchoAdapter(providerId);
