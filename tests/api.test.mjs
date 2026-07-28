@@ -248,6 +248,61 @@ test('Asker.promptJson renders, requests JSON, repairs, and validates', async ()
   assert.equal(request.format.type, 'json_schema');
 });
 
+test('Asker.promptJsonExact preserves exact model selection and corrective JSON options', async () => {
+  const providerId = 'unit-json-exact';
+  let generated;
+  const completion = new CompletionEngine([]).registerAdapter({
+    id: providerId,
+    async generate(options) {
+      generated = options;
+      return {
+        text: '{"answer":"wrong"}',
+        ok: true,
+        model: {providerId, modelId: options.modelId}
+      };
+    }
+  });
+  const asker = new Asker({
+    providerState: {
+      providers: {
+        [providerId]: {id: providerId}
+      }
+    },
+    promptEngine: new PromptEngine(new MemoryTemplateSource({
+      'answer.prompt': 'Question: {{ question }}'
+    })),
+    completion
+  });
+  let correction;
+
+  const result = await asker.promptJsonExact(
+    'answer',
+    {question: 'What is six times seven?'},
+    {providerId, modelId: 'chosen-model'},
+    {
+      schema: z.object({answer: z.literal(42)}),
+      maxCorrectionAttempts: 1,
+      async correct(context) {
+        correction = context;
+        return {
+          text: '{"answer":42}',
+          ok: true,
+          model: {providerId, modelId: 'chosen-model'}
+        };
+      }
+    }
+  );
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.data, {answer: 42});
+  assert.equal(result.substantiveCalls, 1);
+  assert.equal(result.correctiveCalls, 1);
+  assert.equal(generated.modelId, 'chosen-model');
+  assert.equal(generated.format.type, 'json_schema');
+  assert.equal(correction.failureKind, 'schema_invalid');
+  assert.equal(correction.correctionAttempt, 1);
+});
+
 test('Asker legacy constructor keeps prompt injection behavior', async () => {
   const providerId = 'unit-legacy';
   const completion = registerEchoAdapter(providerId);

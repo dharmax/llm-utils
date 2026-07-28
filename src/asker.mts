@@ -29,8 +29,10 @@ import {ModelRouter} from './routing.mts'
 import {SystemProbe} from './discovery.mts'
 import {
     requestStructuredJson,
+    type StructuredCorrectionContext,
     type StructuredGenerationResult,
     type StructuredOutputOptions,
+    type StructuredRequestContext,
 } from './structured-json.mts'
 
 type PromptData = Record<string, unknown>
@@ -42,6 +44,8 @@ export type AskerJsonOptions<T> =
     & {
         label?: string
         schema?: ZodType<T>
+        correct?: (context: StructuredCorrectionContext<T>) => Promise<GenerationResult>
+        maxCorrectionAttempts?: number
     }
 
 type ContextInjection = {
@@ -202,25 +206,12 @@ export class Asker {
         taskTypeId: string,
         options: AskerJsonOptions<T> = {},
     ): Promise<StructuredGenerationResult<T>> {
-        const {
-            label = taskTypeId,
-            schema,
-            providerSchema,
-            schemaName,
-            strict,
-            ...askOptions
-        } = options
-        return requestStructuredJson<T>({
-            label,
-            ...(schema ? {schema} : {}),
-            ...(providerSchema ? {providerSchema} : {}),
-            ...(schemaName ? {schemaName} : {}),
-            ...(strict === undefined ? {} : {strict}),
-            execute: request => this.ask(prompt, taskTypeId, {
-                ...askOptions,
+        return this.requestJson(options, taskTypeId, (request, requestOptions) => (
+            this.ask(prompt, taskTypeId, {
+                ...requestOptions,
                 format: request.responseFormat,
-            }),
-        })
+            })
+        ))
     }
 
     async promptJson<T = JsonRoot>(
@@ -228,13 +219,58 @@ export class Asker {
         data: PromptData,
         options: AskerJsonOptions<T> = {},
     ): Promise<StructuredGenerationResult<T>> {
+        return this.requestJson(options, templateName, (request, requestOptions) => (
+            this.prompt(templateName, {}, data, {
+                ...requestOptions,
+                format: request.responseFormat,
+            })
+        ))
+    }
+
+    async askJsonExact<T = JsonRoot>(
+        prompt: string,
+        target: ModelTarget,
+        options: AskerJsonOptions<T> = {},
+    ): Promise<StructuredGenerationResult<T>> {
+        return this.requestJson(options, `${target.providerId}/${target.modelId}`, (request, requestOptions) => (
+            this.askExact(prompt, target, {
+                ...requestOptions,
+                format: request.responseFormat,
+            })
+        ))
+    }
+
+    async promptJsonExact<T = JsonRoot>(
+        templateName: string,
+        data: PromptData,
+        target: ModelTarget,
+        options: AskerJsonOptions<T> = {},
+    ): Promise<StructuredGenerationResult<T>> {
+        return this.requestJson(options, templateName, (request, requestOptions) => (
+            this.promptExact(templateName, data, target, {
+                ...requestOptions,
+                format: request.responseFormat,
+            })
+        ))
+    }
+
+    private requestJson<T>(
+        options: AskerJsonOptions<T>,
+        defaultLabel: string,
+        execute: (
+            request: StructuredRequestContext<T>,
+            options: Omit<Partial<InteractionTurn>, 'format' | 'prompt'>,
+        ) => Promise<GenerationResult>,
+    ): Promise<StructuredGenerationResult<T>> {
         const {
-            label = templateName,
+            label = defaultLabel,
             schema,
             providerSchema,
             schemaName,
             strict,
-            ...promptOptions
+            correct,
+            maxCorrectionAttempts,
+            ...requestOptions
         } = options
         return requestStructuredJson<T>({
             label,
@@ -242,10 +278,9 @@ export class Asker {
             ...(providerSchema ? {providerSchema} : {}),
             ...(schemaName ? {schemaName} : {}),
             ...(strict === undefined ? {} : {strict}),
-            execute: request => this.prompt(templateName, {}, data, {
-                ...promptOptions,
-                format: request.responseFormat,
-            }),
+            ...(correct ? {correct} : {}),
+            ...(maxCorrectionAttempts === undefined ? {} : {maxCorrectionAttempts}),
+            execute: request => execute(request, requestOptions),
         })
     }
 

@@ -14,11 +14,14 @@ const result = await asker.askJson('Return an answer as JSON.', 'analysis', {
 })
 ```
 
-For templates, use `asker.promptJson(templateName, data, {schema})`. Both
-methods wrap `ask` or `prompt`, infer `result.data` from the schema, choose JSON
-transport, repair the response locally, and validate it.
-`requestStructuredJson` remains the lower-level API for applications that need
-custom correction orchestration.
+For templates, use `asker.promptJson(templateName, data, {schema})`. Exact
+provider/model selection is available through `askJsonExact` and
+`promptJsonExact`. These methods wrap their ordinary Asker counterparts, infer
+`result.data` from the schema, choose JSON transport, repair the response
+locally, and validate it. Advanced callers may provide `correct` and
+`maxCorrectionAttempts` without leaving the Asker API.
+
+`requestStructuredJson` remains the lower-level API for transport adapters.
 
 ## Validation and provider schemas
 
