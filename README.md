@@ -5,7 +5,8 @@ Small TypeScript primitives for LLM-powered tools:
 - `Asker` executes direct or template-backed requests.
 - `CompletionEngine` owns and dispatches provider adapters per client instance.
 - Provider failures preserve kind, HTTP status, provider code, retryability, and fatality.
-- `requestStructuredJson` executes once, then extracts, repairs, and validates model JSON.
+- `requestStructuredJson` executes one substantive request, then performs local
+  extraction/repair/validation and optional bounded corrective requests.
 - `ModelRouter` scores and selects models.
 - `PromptEngine` loads `.system` and `.prompt` template parts.
 - `ContextManager` and `PromptContextManager` support lightweight prompt injection.
@@ -68,22 +69,36 @@ without lifecycle scripts or committed build artifacts.
 ## Structured JSON
 
 ```ts
-import {requestStructuredJson} from '@dharmax/llm-utils'
+import {requestStructuredJson, z} from '@dharmax/llm-utils'
 
-const result = await requestStructuredJson(
-    () => asker.promptExact('book-analysis', input, target, {format: 'json'}),
-    'book analysis',
-    zodSchema,
-)
+const schema = z.object({summary: z.string()})
+const result = await requestStructuredJson({
+    label: 'book analysis',
+    schema,
+    execute: request => asker.promptExact(
+        'book-analysis',
+        input,
+        target,
+        {format: request.responseFormat},
+    ),
+})
 if (!result.ok)
     throw new Error(result.message)
 console.log(result.data)
 ```
 
-The parser accepts direct JSON, fenced JSON, embedded objects/arrays, and
-deterministically repairable JSON-shaped text. It does not turn arbitrary prose
-into a valid JSON string. The schema only needs a `safeParse()` method, so the
-package does not force a validation library on consumers.
+The package owns Zod 4 and re-exports `z`. It converts safely representable Zod
+schemas to provider JSON Schema, accepts an explicit provider-schema override,
+and falls back to generic JSON mode while retaining full local Zod validation
+for transforms, preprocessors, custom refinements, and other semantic checks.
+
+The parser accepts object or array roots from direct JSON, fenced JSON, or
+surrounding prose. Candidate extraction is balanced and quote-aware; it rejects
+scalars and arbitrary prose. When a schema is supplied, every deterministic
+candidate is considered until one validates.
+
+See [docs/structured-output.md](docs/structured-output.md) for provider mapping,
+fallback, diagnostics, checkpoint validation, and correction semantics.
 
 ## Fatal-provider circuit
 
@@ -140,7 +155,9 @@ The root export intentionally contains the package capabilities without exposing
 
 - request/session: `Asker`, `LLMSession`
 - completion/adapters: `CompletionEngine`, typed `LlmFailure`, `OpenAIAdapter`, `AnthropicAdapter`, `GoogleAdapter`, `OllamaProvider`
-- structured responses: `requestStructuredJson`, `parseStructuredJson`, `StructuredJsonError`
+- structured responses: `z`, `zodToJsonSchema`, `resolveStructuredOutput`,
+  `requestStructuredJson`, `parseStructuredJsonResult`,
+  `parseStructuredJson`, `validateStructuredValue`, `StructuredJsonError`
 - request lifecycle: `ProviderCircuit`
 - routing: `ModelRouter`, `RouterHeuristics`
 - prompts/context: `PromptEngine`, `ContextManager`, `ContextCompressor`

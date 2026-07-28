@@ -3,6 +3,26 @@ import type {PromptEngine} from './prompts.mts'
 
 export type ProviderId = 'google' | 'openai' | 'anthropic' | 'ollama' | string
 
+export type JsonSchema = Record<string, unknown>
+
+export type ResponseFormat =
+    | 'text'
+    | 'json'
+    | {type: 'text'}
+    | {type: 'json'}
+    | {
+        type: 'json_schema'
+        name: string
+        schema: JsonSchema
+        strict?: boolean
+    }
+
+export type StructuredOutputTransport = {
+    requested: 'json' | 'json_schema'
+    nativeJsonSchemaUsed: boolean
+    fallbackReason?: 'provider_unsupported'
+}
+
 export interface ProviderConfig {
     id: ProviderId
     apiKey?: string
@@ -46,7 +66,7 @@ export interface TaskType {
 export interface InteractionTurn {
     prompt: string
     system?: string
-    format?: 'text' | 'json'
+    format?: ResponseFormat
     modelId?: string
     providerId?: ProviderId
     signal?: AbortSignal | null
@@ -103,6 +123,7 @@ export interface GenerationResult {
     latencyMs?: number
     response?: string
     res?: string
+    structuredOutput?: StructuredOutputTransport
 }
 
 export interface SessionContext {
@@ -152,7 +173,7 @@ export interface AskerOptions {
 
 export interface ExactRequestOptions {
     system?: string
-    format?: 'text' | 'json'
+    format?: ResponseFormat
     temperature?: number
     signal?: AbortSignal | null
 }
@@ -172,7 +193,7 @@ export interface GenerateOptions {
     prompt: string
     system?: string
     config: ProviderConfig
-    format?: 'text' | 'json'
+    format?: ResponseFormat
     temperature?: number
     signal?: AbortSignal | null
 }

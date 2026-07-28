@@ -14,7 +14,8 @@ import {
   parseStructuredJson,
   PromptEngine,
   ProviderDiscovery,
-  StructuredJsonError
+  StructuredJsonError,
+  z
 } from '../dist/index.mjs';
 
 class MemoryTemplateSource {
@@ -86,13 +87,7 @@ test('CompletionEngine owns adapters per instance', async () => {
 });
 
 test('parseStructuredJson extracts, repairs, and validates model responses', () => {
-  const schema = {
-    safeParse(value) {
-      return value?.answer === 42
-        ? { success: true, data: value }
-        : { success: false, error: { issues: [{ path: ['answer'], message: 'Expected 42' }] } };
-    }
-  };
+  const schema = z.object({answer: z.literal(42)});
 
   assert.deepEqual(
     parseStructuredJson('```json\n{"answer": 42}\n```', 'answer', schema),
@@ -110,7 +105,7 @@ test('parseStructuredJson extracts, repairs, and validates model responses', () 
     () => parseStructuredJson('{"answer": 1}', 'wrong answer', schema),
     error => error instanceof StructuredJsonError
       && error.kind === 'schema_invalid'
-      && error.message.includes('answer: Expected 42')
+      && error.message.includes('answer:')
   );
 });
 

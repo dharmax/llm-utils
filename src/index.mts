@@ -1,3 +1,5 @@
+export {z} from 'zod'
+export type {ZodError, ZodIssue, ZodType} from 'zod'
 export * from './types.mts';
 export * from './asker.mts';
 export * from './completion.mts';

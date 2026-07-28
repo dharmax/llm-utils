@@ -11,12 +11,13 @@ import type {
     ModelInfo,
     ProviderAdapter,
     ProviderConfig,
+    ResponseFormat,
 } from './types.mts'
 
 export interface CompletionOptions {
     system?: string
     temperature?: number
-    format?: 'text' | 'json'
+    format?: ResponseFormat
     signal?: AbortSignal | null
 }
 

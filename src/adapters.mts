@@ -4,6 +4,8 @@ import type {
     LlmFailure,
     ProviderAdapter,
     ProviderId,
+    ResponseFormat,
+    StructuredOutputTransport,
 } from './types.mts'
 
 type JsonRecord = Record<string, unknown>
@@ -21,7 +23,8 @@ export class OpenAIAdapter implements ProviderAdapter {
                 fatal: true,
             })
 
-        return requestJson({
+        const responseFormat = normalizeResponseFormat(format)
+        const result = await requestJson({
             providerId: this.id,
             modelId,
             url: `${config.baseUrl ?? 'https://api.openai.com/v1'}/chat/completions`,
@@ -33,7 +36,7 @@ export class OpenAIAdapter implements ProviderAdapter {
                     {role: 'user', content: prompt},
                 ],
                 temperature: options.temperature ?? 0.1,
-                response_format: format === 'json' ? {type: 'json_object'} : undefined,
+                response_format: openAiResponseFormat(responseFormat),
             },
             signal,
             read: data => ({
@@ -45,6 +48,7 @@ export class OpenAIAdapter implements ProviderAdapter {
                 ),
             }),
         })
+        return withStructuredOutput(result, responseFormat, true)
     }
 }
 
@@ -61,7 +65,8 @@ export class AnthropicAdapter implements ProviderAdapter {
                 fatal: true,
             })
 
-        return requestJson({
+        const responseFormat = normalizeResponseFormat(options.format)
+        const result = await requestJson({
             providerId: this.id,
             modelId,
             url: `${config.baseUrl ?? 'https://api.anthropic.com/v1'}/messages`,
@@ -94,6 +99,7 @@ export class AnthropicAdapter implements ProviderAdapter {
                 }
             },
         })
+        return withStructuredOutput(result, responseFormat, false)
     }
 }
 
@@ -110,7 +116,8 @@ export class GoogleAdapter implements ProviderAdapter {
                 fatal: true,
             })
 
-        return requestJson({
+        const responseFormat = normalizeResponseFormat(format)
+        const result = await requestJson({
             providerId: this.id,
             modelId,
             url: `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${config.apiKey}`,
@@ -118,7 +125,12 @@ export class GoogleAdapter implements ProviderAdapter {
                 contents: [{role: 'user', parts: [{text: prompt}]}],
                 generationConfig: {
                     temperature: options.temperature ?? 0.1,
-                    responseMimeType: format === 'json' ? 'application/json' : 'text/plain',
+                    responseMimeType: responseFormat.type === 'text'
+                        ? 'text/plain'
+                        : 'application/json',
+                    ...(responseFormat.type === 'json_schema'
+                        ? {responseJsonSchema: responseFormat.schema}
+                        : {}),
                 },
                 ...(system ? {systemInstruction: {parts: [{text: system}]}} : {}),
             },
@@ -132,6 +144,7 @@ export class GoogleAdapter implements ProviderAdapter {
                 ),
             }),
         })
+        return withStructuredOutput(result, responseFormat, true)
     }
 }
 
@@ -143,7 +156,8 @@ export class OllamaProvider implements ProviderAdapter {
         const host = config.host ?? 'localhost'
         const baseUrl = host.startsWith('http') ? host : `http://${host}:11434`
 
-        return requestJson({
+        const responseFormat = normalizeResponseFormat(format)
+        const result = await requestJson({
             providerId: this.id,
             modelId,
             url: `${baseUrl}/api/generate`,
@@ -152,7 +166,11 @@ export class OllamaProvider implements ProviderAdapter {
                 prompt,
                 system,
                 stream: false,
-                format: format === 'json' ? 'json' : undefined,
+                format: responseFormat.type === 'json_schema'
+                    ? responseFormat.schema
+                    : responseFormat.type === 'json'
+                        ? 'json'
+                        : undefined,
                 options: {temperature: options.temperature ?? 0.1},
             },
             signal,
@@ -169,6 +187,7 @@ export class OllamaProvider implements ProviderAdapter {
                 }
             },
         })
+        return withStructuredOutput(result, responseFormat, true)
     }
 }
 
@@ -355,4 +374,57 @@ function valueAt(value: unknown, path: Array<string | number>): unknown {
 
 function stringValue(value: unknown): string {
     return typeof value === 'string' ? value : ''
+}
+
+type NormalizedResponseFormat =
+    | {type: 'text'}
+    | {type: 'json'}
+    | {
+        type: 'json_schema'
+        name: string
+        schema: Record<string, unknown>
+        strict?: boolean
+    }
+
+function normalizeResponseFormat(format: ResponseFormat | undefined): NormalizedResponseFormat {
+    if (!format || format === 'text')
+        return {type: 'text'}
+    if (format === 'json')
+        return {type: 'json'}
+    return format
+}
+
+function openAiResponseFormat(
+    format: NormalizedResponseFormat,
+): JsonRecord | undefined {
+    if (format.type === 'json')
+        return {type: 'json_object'}
+    if (format.type === 'json_schema') {
+        return {
+            type: 'json_schema',
+            json_schema: {
+                name: format.name,
+                schema: format.schema,
+                ...(format.strict === undefined ? {} : {strict: format.strict}),
+            },
+        }
+    }
+    return undefined
+}
+
+function withStructuredOutput(
+    result: GenerationResult,
+    format: NormalizedResponseFormat,
+    supportsJsonSchema: boolean,
+): GenerationResult {
+    if (format.type === 'text')
+        return result
+    const structuredOutput: StructuredOutputTransport = {
+        requested: format.type,
+        nativeJsonSchemaUsed: format.type === 'json_schema' && supportsJsonSchema,
+        ...(format.type === 'json_schema' && !supportsJsonSchema
+            ? {fallbackReason: 'provider_unsupported'}
+            : {}),
+    }
+    return {...result, structuredOutput}
 }

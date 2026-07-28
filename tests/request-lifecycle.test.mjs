@@ -6,6 +6,7 @@ import {
     ProviderCircuit,
     calculateUsageCost,
     requestStructuredJson,
+    z,
 } from '../dist/index.mjs'
 
 test('exact structured requests execute and validate once', async () => {
@@ -28,13 +29,7 @@ test('exact structured requests execute and validate once', async () => {
     const result = await requestStructuredJson(
         () => asker.askExact('Return JSON.', {providerId: 'mock', modelId: 'exact'}),
         'test',
-        {
-            safeParse(value) {
-                return value?.value === 7
-                    ? {success: true, data: value}
-                    : {success: false, error: new Error('value')}
-            },
-        },
+        z.object({value: z.literal(7)}),
     )
 
     assert.equal(result.ok, true)
