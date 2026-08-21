@@ -23,7 +23,8 @@
     "build": "rm -rf dist && esbuild src/index.mts --bundle --platform=node --format=esm --outfile=dist/index.mjs --sourcemap --resolve-extensions=.mts,.mtsx,.js,.json --external:zod --external:node:fs/promises --external:node:path --external:node:child_process --external:node:util && tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run test",
-    "test": "npm run build && node --test tests/**/*.test.mjs"
+    "test": "npm run build && node --test tests/**/*.test.mjs",
+    "test:bun": "bun test"
   },
   "keywords": [
     "llm",

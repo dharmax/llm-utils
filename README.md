@@ -3,27 +3,51 @@
 Ultra-lean, strictly typed TypeScript primitives for LLM execution, automatic structured JSON, dynamic routing, local LLM support (Ollama / OpenAI-compatible), prompt templates, context injection, and metrics.
 
 ```
-Zero-Config Setup  →  1-Line Asks  →  Typed JSON (Zod)  →  Local LLM First  →  100% Reliable
+Zero-Config Setup  →  1-Line Asks  →  Typed JSON (Zod)  →  Bun & Node Native  →  100% Reliable
 ```
 
 ---
 
-## Highlights & Local LLM Support
+## Highlights
 
+* **Bun-First & Node Compatible**: Ships native TypeScript source under the `"bun"` package export condition for instant zero-bundle execution in Bun, with pre-bundled ESM for Node.
 * **First-Class Local LLM Support**: Native Ollama provider with `/api/chat`, host auto-detection (`OLLAMA_HOST` / `LOCAL_LLM_URL`), model discovery via `/api/tags`, and `preferLocal` routing to run 100% offline & private.
 * **OpenAI-Compatible Local Servers**: Seamlessly connect to vLLM, LM Studio, LocalAI, or llama.cpp servers via custom `baseUrl`.
 * **Zero-Ceremony Setup**: Automatically reads `OPENAI_API_KEY`, `GEMINI_API_KEY` / `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, `OLLAMA_HOST`, and `LOCAL_LLM_URL` from `process.env`.
 * **Automatic Typed JSON (`asker.json()`)**: Injects provider-native schema, strips markdown fences, repairs malformed JSON with `jsonrepair` (crucial for small local models like 3B/7B), and returns inferred `data: z.infer<typeof schema>`.
 * **Dynamic Multi-Tier Routing**: Route by task alias (`code`, `fast`, `reasoning`, `local`), direct provider target (`'openai/gpt-4o'`), bare model name (`'llama3.2'`, `'deepseek-r1'`, `'qwen2.5-coder'`), or custom routing hooks.
 * **Fatal-Provider Circuit Breaker**: Prevents redundant calls after fatal failures (e.g., quota or auth exhaustion).
-* **Plug-and-Play Extensibility**: Standard interfaces for [`@dharmax/context-manager`](../context-manager), [`@dharmax/pubsub`](../pubsub), and custom storage sinks.
+* **Plug-and-Play Extensibility**: Standard interfaces for [`@dharmax/context-manager`](../context-manager), [`@dharmax/pubsub`](../pubsub), procedural generators (Rant/fuzzing), and custom storage sinks.
 
 ---
 
 ## Installation
 
 ```sh
+# npm
 npm install @dharmax/llm-utils zod
+
+# bun
+bun add @dharmax/llm-utils zod
+```
+
+---
+
+## Bun & Node Native Usage
+
+In **Bun**, `@dharmax/llm-utils` runs directly from its `.mts` TypeScript source with zero build artifacts or compilation overhead:
+
+```ts
+import { Asker, z } from '@dharmax/llm-utils'
+
+const asker = new Asker()
+const result = await asker.ask('Hello from Bun!')
+console.log(result.text)
+```
+
+Run directly with Bun:
+```sh
+bun run index.ts
 ```
 
 ---
@@ -124,7 +148,9 @@ const claude = await asker.ask('Creative story', { model: 'anthropic/claude-3-7-
 
 ---
 
-## Prompt Templates & Context Injection
+## Prompt Templates & Procedural Generation
+
+### 1. Template Files with Frontmatter
 
 `PromptEngine` loads templates with optional JSON frontmatter and renders `{{ variables }}`:
 
@@ -146,6 +172,31 @@ const result = await asker.prompt('code-review', {
     // Plugs directly into @dharmax/context-manager or any custom resolver
     context: async (req) => `Relevant guideline: Always type parameters.`,
 })
+```
+
+### 2. Procedural Prompt Generation (Rant / Combinatorial Fuzzing)
+
+For A/B prompt testing, prompt fuzzing, or synthetic variation generation, you can plug procedural text generators (like [Rant / rantjs](https://github.com/robbestad/Rantjs)) directly into `PromptEngine` via custom loaders:
+
+```ts
+import { Asker, PromptEngine } from '@dharmax/llm-utils'
+import rant from 'rantjs' // or any procedural generator
+
+// Custom template source that dynamically expands procedural variations
+const proceduralSource = {
+    async load(templateName: string) {
+        const rawTemplate = await fetchTemplateString(templateName)
+        // e.g. "Write a {short|concise|bulleted} summary of {{ text }}"
+        return rant(rawTemplate)
+    },
+}
+
+const asker = new Asker({
+    promptEngine: new PromptEngine(proceduralSource),
+})
+
+// Executes with randomized procedural prompt variants on each call
+const result = await asker.prompt('summarize', { text: 'Article content...' })
 ```
 
 ---
@@ -213,10 +264,14 @@ export { parseStructuredJson, parseStructuredJsonResult, zodToJsonSchema, Provid
 ## Development & Testing
 
 ```sh
+# Node.js
 npm run build      # Bundles with esbuild and emits declaration files
 npm run typecheck  # Strict TypeScript check
 npm test           # Executes test suite (25 tests)
 npm run check      # Typecheck + tests
+
+# Bun
+bun test           # Runs all tests instantly in native TypeScript mode
 ```
 
 ---
