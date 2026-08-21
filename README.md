@@ -17,7 +17,7 @@ Zero-Config Setup  →  1-Line Asks  →  Typed JSON (Zod)  →  Bun & Node Nati
 * **Automatic Typed JSON (`asker.json()`)**: Injects provider-native schema, strips markdown fences, repairs malformed JSON with `jsonrepair` (crucial for small local models like 3B/7B), and returns inferred `data: z.infer<typeof schema>`.
 * **Dynamic Multi-Tier Routing**: Route by task alias (`code`, `fast`, `reasoning`, `local`), direct provider target (`'openai/gpt-4o'`), bare model name (`'llama3.2'`, `'deepseek-r1'`, `'qwen2.5-coder'`), or custom routing hooks.
 * **Fatal-Provider Circuit Breaker**: Prevents redundant calls after fatal failures (e.g., quota or auth exhaustion).
-* **Plug-and-Play Extensibility**: Standard interfaces for [`@dharmax/context-manager`](../context-manager), [`@dharmax/pubsub`](../pubsub), procedural generators (Rant/fuzzing), and custom storage sinks.
+* **Modular Ecosystem Integration**: Standard interfaces for [`@dharmax/context-manager`](../context-manager), [`@dharmax/block-patcher`](../block-patcher), [`@dharmax/codebase-parser`](../codebase-parser), [`@dharmax/text-compiler`](../text-compiler), and [`@dharmax/pubsub`](../pubsub). See [docs/ecosystem.md](docs/ecosystem.md).
 
 ---
 
@@ -198,6 +198,18 @@ const asker = new Asker({
 // Executes with randomized procedural prompt variants on each call
 const result = await asker.prompt('summarize', { text: 'Article content...' })
 ```
+
+---
+
+## Modular Ecosystem Integrations
+
+`@dharmax/llm-utils` integrates cleanly with the broader companion toolchain. See [docs/ecosystem.md](docs/ecosystem.md) for full architectural guides:
+
+* **[`@dharmax/context-manager`](../context-manager)**: Hierarchical memory, RAG, and token budgeting.
+* **[`@dharmax/block-patcher`](../block-patcher)**: Apply LLM-generated `SEARCH/REPLACE` code diffs directly to files.
+* **[`@dharmax/codebase-parser`](../codebase-parser)**: Extract AST symbols, imports, and facts from 10+ languages (TS, Python, Rust, Go, Shell, etc.).
+* **[`@dharmax/text-compiler`](../text-compiler)**: Compile natural language into deterministic JavaScript state machines.
+* **[`@dharmax/pubsub`](../pubsub)**: Real-time telemetry, token metrics, and event broadcasting.
 
 ---
 
