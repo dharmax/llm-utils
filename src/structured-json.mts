@@ -65,33 +65,53 @@ export function extractJsonCandidate(raw: string): string {
     return text
 }
 
+function tryParseJson(text: string): {ok: true; value: unknown} | {ok: false; error: unknown} {
+    try {
+        return {ok: true, value: JSON.parse(text)}
+    } catch (err) {
+        try {
+            return {ok: true, value: JSON.parse(jsonrepair(text))}
+        } catch {
+            return {ok: false, error: err}
+        }
+    }
+}
+
 export function parseStructuredJsonResult<T = unknown>(
     raw: string,
     schema?: ZodType<T> | undefined,
     label = 'response',
 ): {ok: true; data: T} | {ok: false; kind: StructuredJsonFailure; message: string; zodError?: ZodError | undefined; zodIssues?: ZodIssue[] | undefined} {
-    const candidate = extractJsonCandidate(raw)
-    let parsed: unknown
-
-    try {
-        parsed = JSON.parse(candidate)
-    } catch {
-        try {
-            parsed = JSON.parse(jsonrepair(candidate))
-        } catch (err) {
-            return {
-                ok: false,
-                kind: 'parse_failed',
-                message: `Failed to parse JSON for ${label}: ${err instanceof Error ? err.message : String(err)}`,
-            }
-        }
-    }
-
-    if (parsed === null || typeof parsed !== 'object') {
+    const trimmed = raw.trim()
+    if (!trimmed) {
         return {
             ok: false,
             kind: 'parse_failed',
-            message: `JSON root for ${label} must be an object or array.`,
+            message: `Empty response received for ${label}.`,
+        }
+    }
+
+    // Try candidate first, fallback to raw text if different
+    const candidate = extractJsonCandidate(trimmed)
+    const candidates = candidate === trimmed ? [candidate] : [candidate, trimmed]
+
+    let parsed: unknown = null
+    let parseSuccess = false
+
+    for (const cand of candidates) {
+        const res = tryParseJson(cand)
+        if (res.ok) {
+            parsed = res.value
+            parseSuccess = true
+            break
+        }
+    }
+
+    if (!parseSuccess || parsed === null || typeof parsed !== 'object') {
+        return {
+            ok: false,
+            kind: 'parse_failed',
+            message: `Failed to parse valid JSON object/array for ${label}.`,
         }
     }
 

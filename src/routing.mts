@@ -1,4 +1,4 @@
-import type {ModelTarget} from './types.mts'
+import type {ModelTarget, ProviderId} from './types.mts'
 
 export interface TaskRouteMap {
     [task: string]: string | ModelTarget
@@ -42,13 +42,16 @@ export class ModelRouter {
     resolve(
         targetOrTask?: string | ModelTarget | undefined,
         availableProviders: string[] = ['google', 'openai', 'anthropic', 'ollama'],
+        preferLocalOverride?: boolean | undefined,
     ): ModelTarget {
+        const useLocal = preferLocalOverride !== undefined ? preferLocalOverride : this.preferLocal
+
         if (typeof targetOrTask === 'object' && targetOrTask.providerId && targetOrTask.modelId)
             return targetOrTask
 
         const targetStr = targetOrTask ? String(targetOrTask).trim() : ''
 
-        // 1. Direct provider/model string (e.g. 'openai/gpt-4o')
+        // 1. Direct provider/model string (e.g. 'openai/gpt-4o' or 'ollama/llama3.2')
         if (targetStr.includes('/'))
             return parseModelTarget(targetStr)
 
@@ -59,11 +62,14 @@ export class ModelRouter {
                 return typeof custom === 'string' ? parseModelTarget(custom) : custom
         }
 
-        // 3. Local preference
-        if (this.preferLocal && availableProviders.includes('ollama'))
+        // 3. Local preference explicitly requested
+        if (useLocal && availableProviders.includes('ollama')) {
+            if (targetStr && this.routes[targetStr] && String(this.routes[targetStr]).startsWith('ollama/'))
+                return parseModelTarget(this.routes[targetStr]!)
             return {providerId: 'ollama', modelId: 'llama3.2'}
+        }
 
-        // 4. Mapped task
+        // 4. Mapped task (e.g. 'code', 'fast', 'local')
         if (targetStr && this.routes[targetStr]) {
             const mapped = this.routes[targetStr]
             const parsed = typeof mapped === 'string' ? parseModelTarget(mapped) : mapped
@@ -71,11 +77,18 @@ export class ModelRouter {
                 return parsed
         }
 
-        return this.resolveDefault(availableProviders)
+        // 5. Bare model name inference (e.g. 'gpt-4o', 'qwen2.5-coder', 'llama3.2', 'deepseek-r1')
+        if (targetStr) {
+            const inferred = inferProviderFromModelName(targetStr)
+            if (inferred)
+                return {providerId: inferred, modelId: targetStr}
+        }
+
+        return this.resolveDefault(availableProviders, useLocal)
     }
 
-    private resolveDefault(availableProviders: string[]): ModelTarget {
-        if (this.preferLocal && availableProviders.includes('ollama'))
+    private resolveDefault(availableProviders: string[], useLocal = false): ModelTarget {
+        if (useLocal && availableProviders.includes('ollama'))
             return {providerId: 'ollama', modelId: 'llama3.2'}
 
         // Check routes['default']
@@ -119,11 +132,46 @@ export function parseModelTarget(input: string | ModelTarget): ModelTarget {
 
     const str = String(input).trim()
     const slashIdx = str.indexOf('/')
-    if (slashIdx === -1)
-        return {providerId: 'unknown', modelId: str}
+    if (slashIdx === -1) {
+        const inferred = inferProviderFromModelName(str)
+        return {providerId: inferred ?? 'unknown', modelId: str}
+    }
 
     return {
         providerId: str.slice(0, slashIdx).trim(),
         modelId: str.slice(slashIdx + 1).trim(),
     }
+}
+
+export function inferProviderFromModelName(name: string): ProviderId | undefined {
+    const lower = name.toLowerCase()
+    if (lower.startsWith('gpt') || lower.startsWith('o1') || lower.startsWith('o3') || lower.includes('text-embedding'))
+        return 'openai'
+    if (lower.startsWith('claude'))
+        return 'anthropic'
+    if (lower.startsWith('gemini'))
+        return 'google'
+    if (
+        lower.startsWith('llama')
+        || lower.startsWith('qwen')
+        || lower.startsWith('phi')
+        || lower.startsWith('mistral')
+        || lower.startsWith('deepseek')
+        || lower.startsWith('gemma')
+        || lower.startsWith('codellama')
+        || lower.startsWith('smollm')
+        || lower.startsWith('tinyllama')
+        || lower.startsWith('nemotron')
+        || lower.startsWith('starcoder')
+        || lower.startsWith('yi')
+        || lower.startsWith('command-r')
+        || lower.startsWith('vicuna')
+        || lower.startsWith('hermes')
+        || lower.startsWith('wizardlm')
+        || lower.startsWith('falcon')
+        || lower.startsWith('solar')
+        || lower.startsWith('openhermes')
+    )
+        return 'ollama'
+    return undefined
 }

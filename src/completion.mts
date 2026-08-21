@@ -18,6 +18,7 @@ export interface CompletionOptions {
     temperature?: number | undefined
     format?: ResponseFormat | undefined
     signal?: AbortSignal | null | undefined
+    timeoutMs?: number | undefined
 }
 
 export function builtInAdapters(): ProviderAdapter[] {
@@ -75,6 +76,7 @@ export class CompletionEngine {
             temperature: options.temperature,
             format: options.format,
             signal: options.signal,
+            timeoutMs: options.timeoutMs,
         }
 
         try {

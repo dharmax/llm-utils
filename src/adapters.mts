@@ -11,21 +11,26 @@ export class OpenAIAdapter implements ProviderAdapter {
     readonly id = 'openai'
 
     async generate(options: GenerateOptions): Promise<GenerationResult> {
-        const {modelId, prompt, system, config, format, signal, temperature} = options
-        if (!config.apiKey)
+        const {modelId, prompt, system, config, format, signal, timeoutMs, temperature} = options
+        if (!config.apiKey && !config.baseUrl)
             return missingApiKey(this.id, modelId)
 
+        const baseUrl = (config.baseUrl ?? 'https://api.openai.com/v1').replace(/\/+$/, '')
         const responseFormat = toOpenAiFormat(format)
         const messages = [
             ...(system ? [{role: 'system', content: system}] : []),
             {role: 'user', content: prompt},
         ]
 
+        const headers: Record<string, string> = {}
+        if (config.apiKey)
+            headers.Authorization = `Bearer ${config.apiKey}`
+
         return postJson({
             providerId: this.id,
             modelId,
-            url: `${config.baseUrl ?? 'https://api.openai.com/v1'}/chat/completions`,
-            headers: {Authorization: `Bearer ${config.apiKey}`},
+            url: `${baseUrl}/chat/completions`,
+            headers,
             body: {
                 model: modelId,
                 messages,
@@ -33,6 +38,7 @@ export class OpenAIAdapter implements ProviderAdapter {
                 ...(responseFormat ? {response_format: responseFormat} : {}),
             },
             signal,
+            timeoutMs,
             extract: data => {
                 const choice = (data as {choices?: Array<{message?: {content?: string}}>})?.choices?.[0]
                 const usageData = (data as {usage?: {prompt_tokens?: number; completion_tokens?: number; total_tokens?: number}})?.usage
@@ -49,14 +55,16 @@ export class AnthropicAdapter implements ProviderAdapter {
     readonly id = 'anthropic'
 
     async generate(options: GenerateOptions): Promise<GenerationResult> {
-        const {modelId, prompt, system, config, signal, temperature} = options
+        const {modelId, prompt, system, config, signal, timeoutMs, temperature} = options
         if (!config.apiKey)
             return missingApiKey(this.id, modelId)
+
+        const baseUrl = (config.baseUrl ?? 'https://api.anthropic.com/v1').replace(/\/+$/, '')
 
         return postJson({
             providerId: this.id,
             modelId,
-            url: `${config.baseUrl ?? 'https://api.anthropic.com/v1'}/messages`,
+            url: `${baseUrl}/messages`,
             headers: {
                 'x-api-key': config.apiKey,
                 'anthropic-version': '2023-06-01',
@@ -69,6 +77,7 @@ export class AnthropicAdapter implements ProviderAdapter {
                 temperature: temperature ?? 0.1,
             },
             signal,
+            timeoutMs,
             extract: data => {
                 const content = (data as {content?: Array<{type: string; text?: string}>})?.content ?? []
                 const text = content
@@ -91,9 +100,12 @@ export class GoogleAdapter implements ProviderAdapter {
     readonly id = 'google'
 
     async generate(options: GenerateOptions): Promise<GenerationResult> {
-        const {modelId, prompt, system, config, format, signal, temperature} = options
+        const {modelId, prompt, system, config, format, signal, timeoutMs, temperature} = options
         if (!config.apiKey)
             return missingApiKey(this.id, modelId)
+
+        const cleanModel = modelId.startsWith('models/') ? modelId.slice(7) : modelId
+        const baseUrl = (config.baseUrl ?? 'https://generativelanguage.googleapis.com/v1beta').replace(/\/+$/, '')
 
         const isJson = isJsonFormat(format)
         const schema = format && typeof format === 'object' && format.type === 'json_schema' ? format.schema : undefined
@@ -101,7 +113,7 @@ export class GoogleAdapter implements ProviderAdapter {
         return postJson({
             providerId: this.id,
             modelId,
-            url: `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${config.apiKey}`,
+            url: `${baseUrl}/models/${cleanModel}:generateContent?key=${config.apiKey}`,
             body: {
                 contents: [{role: 'user', parts: [{text: prompt}]}],
                 generationConfig: {
@@ -112,6 +124,7 @@ export class GoogleAdapter implements ProviderAdapter {
                 ...(system ? {systemInstruction: {parts: [{text: system}]}} : {}),
             },
             signal,
+            timeoutMs,
             extract: data => {
                 const cand = (data as {candidates?: Array<{content?: {parts?: Array<{text?: string}>}}>})?.candidates?.[0]
                 const text = cand?.content?.parts?.[0]?.text ?? ''
@@ -129,28 +142,47 @@ export class OllamaProvider implements ProviderAdapter {
     readonly id = 'ollama'
 
     async generate(options: GenerateOptions): Promise<GenerationResult> {
-        const {modelId, prompt, system, config, format, signal, temperature} = options
-        const host = config.host ?? 'http://127.0.0.1:11434'
-        const baseUrl = host.startsWith('http') ? host : `http://${host}`
+        const {modelId, prompt, system, config, format, signal, timeoutMs, temperature} = options
+        const host = config.host ?? config.baseUrl ?? 'http://127.0.0.1:11434'
+        const baseUrl = (host.startsWith('http') ? host : `http://${host}`).replace(/\/+$/, '')
 
         const isJson = isJsonFormat(format)
         const schema = format && typeof format === 'object' && format.type === 'json_schema' ? format.schema : undefined
 
-        return postJson({
-            providerId: this.id,
-            modelId,
-            url: `${baseUrl}/api/generate`,
-            body: {
+        // Modern Ollama chat completions
+        const isChatEndpoint = true
+        const endpoint = isChatEndpoint ? `${baseUrl}/api/chat` : `${baseUrl}/api/generate`
+
+        const body = isChatEndpoint
+            ? {
+                model: modelId,
+                messages: [
+                    ...(system ? [{role: 'system', content: system}] : []),
+                    {role: 'user', content: prompt},
+                ],
+                stream: false,
+                ...(schema ? {format: schema} : isJson ? {format: 'json'} : {}),
+                options: {temperature: temperature ?? 0.1},
+            }
+            : {
                 model: modelId,
                 prompt,
                 system,
                 stream: false,
                 ...(schema ? {format: schema} : isJson ? {format: 'json'} : {}),
                 options: {temperature: temperature ?? 0.1},
-            },
+            }
+
+        return postJson({
+            providerId: this.id,
+            modelId,
+            url: endpoint,
+            body,
             signal,
+            timeoutMs,
             extract: data => {
-                const text = (data as {response?: string})?.response ?? ''
+                const msg = (data as {message?: {content?: string}})?.message
+                const text = msg?.content ?? (data as {response?: string})?.response ?? ''
                 const promptTokens = (data as {prompt_eval_count?: number})?.prompt_eval_count ?? 0
                 const completionTokens = (data as {eval_count?: number})?.eval_count ?? 0
                 return {
@@ -169,12 +201,28 @@ interface PostJsonOptions {
     headers?: Record<string, string> | undefined
     body: Record<string, unknown>
     signal?: AbortSignal | null | undefined
+    timeoutMs?: number | undefined
     extract: (data: unknown) => {text: string; usage?: Usage | undefined}
 }
 
 async function postJson(opts: PostJsonOptions): Promise<GenerationResult> {
-    const {providerId, modelId, url, headers, body, signal, extract} = opts
+    const {providerId, modelId, url, headers, body, signal, timeoutMs, extract} = opts
     try {
+        let effectiveSignal: AbortSignal | undefined
+
+        if (timeoutMs && timeoutMs > 0) {
+            const timeoutSignal = AbortSignal.timeout(timeoutMs)
+            if (signal) {
+                effectiveSignal = (AbortSignal as {any?: (signals: AbortSignal[]) => AbortSignal}).any
+                    ? (AbortSignal as unknown as {any: (signals: AbortSignal[]) => AbortSignal}).any([signal, timeoutSignal])
+                    : signal
+            } else {
+                effectiveSignal = timeoutSignal
+            }
+        } else if (signal) {
+            effectiveSignal = signal
+        }
+
         const response = await fetch(url, {
             method: 'POST',
             headers: {
@@ -182,7 +230,7 @@ async function postJson(opts: PostJsonOptions): Promise<GenerationResult> {
                 ...headers,
             },
             body: JSON.stringify(body),
-            ...(signal ? {signal} : {}),
+            ...(effectiveSignal ? {signal: effectiveSignal} : {}),
         })
 
         const rawText = await response.text()
@@ -260,7 +308,7 @@ function parseHttpFailure(status: number, statusText: string, raw: unknown): Llm
 
 function parseThrownError(err: unknown): LlmFailure {
     const message = err instanceof Error ? err.message : String(err)
-    if (err instanceof DOMException && err.name === 'AbortError')
+    if (err instanceof DOMException && (err.name === 'AbortError' || err.name === 'TimeoutError'))
         return {kind: 'timeout', message, retryable: true, fatal: false, raw: err}
     return {kind: 'network', message, retryable: true, fatal: false, raw: err}
 }
@@ -293,9 +341,8 @@ function isJsonFormat(format?: ResponseFormat): boolean {
         return false
     if (format === 'json')
         return true
-    if (typeof format === 'object' && (format.type === 'json' || format.type === 'json_schema'))
-        return true
-    return false
+    return typeof format === 'object' && (format.type === 'json' || format.type === 'json_schema');
+
 }
 
 function toOpenAiFormat(format?: ResponseFormat): Record<string, unknown> | undefined {

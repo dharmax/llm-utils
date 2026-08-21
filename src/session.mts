@@ -1,6 +1,6 @@
 import type {Asker} from './asker.mts'
 import {MetricsEngine} from './metrics.mts'
-import type {GenerationResult} from './types.mts'
+import type {AskOptions, GenerationResult} from './types.mts'
 
 export interface SessionMessage {
     role: 'user' | 'ai' | 'system'
@@ -29,9 +29,47 @@ export class LLMSession {
         this.metrics = new MetricsEngine()
     }
 
+    /**
+     * Sends a direct chat turn in this session and appends it to history.
+     */
+    async ask(
+        prompt: string,
+        options: AskOptions = {},
+    ): Promise<GenerationResult> {
+        const startedAt = Date.now()
+        const system = options.system ?? this.options.system
+
+        // Prepend conversation context
+        const contextPrompt = this.history.length > 0
+            ? `${this.history.map(m => `[${m.role.toUpperCase()}]: ${m.content}`).join('\n')}\n[USER]: ${prompt}`
+            : prompt
+
+        const result = await this.asker.ask(contextPrompt, {
+            ...options,
+            system,
+        })
+        const latencyMs = Date.now() - startedAt
+
+        if (result.ok) {
+            this.metrics.record(result, latencyMs)
+            this.history.push({role: 'user', content: prompt})
+            this.history.push({role: 'ai', content: result.text})
+
+            const max = this.options.maxHistory ?? 50
+            if (this.history.length > max)
+                this.history = this.history.slice(-max)
+        }
+
+        return {...result, latencyMs}
+    }
+
+    /**
+     * Renders and executes a template with session history injected into variables.
+     */
     async prompt(
         templateName: string,
         data: Record<string, unknown> = {},
+        options: AskOptions = {},
     ): Promise<GenerationResult> {
         const enrichedData = {
             ...data,
@@ -39,8 +77,10 @@ export class LLMSession {
         }
 
         const startedAt = Date.now()
+        const system = options.system ?? this.options.system
         const result = await this.asker.prompt(templateName, enrichedData, {
-            system: this.options.system,
+            ...options,
+            system,
         })
         const latencyMs = Date.now() - startedAt
 

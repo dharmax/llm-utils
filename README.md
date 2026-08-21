@@ -1,21 +1,22 @@
 # @dharmax/llm-utils
 
-Ultra-lean, strictly typed TypeScript primitives for LLM execution, automatic structured JSON, dynamic routing, prompt templates, context injection, and metrics.
+Ultra-lean, strictly typed TypeScript primitives for LLM execution, automatic structured JSON, dynamic routing, local LLM support (Ollama / OpenAI-compatible), prompt templates, context injection, and metrics.
 
 ```
-Zero-Config Setup  →  1-Line Asks  →  Typed JSON (Zod)  →  Dynamic Routing  →  100% Reliable
+Zero-Config Setup  →  1-Line Asks  →  Typed JSON (Zod)  →  Local LLM First  →  100% Reliable
 ```
 
 ---
 
-## Features
+## Highlights & Local LLM Support
 
-* **Zero-Ceremony Setup**: Automatically reads `OPENAI_API_KEY`, `GEMINI_API_KEY` / `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, and `OLLAMA_HOST` from `process.env`.
-* **Automatic Typed JSON (`asker.json()`)**: Injects provider-native schema, strips markdown fences, repairs malformed JSON with `jsonrepair`, and returns inferred `data: z.infer<typeof schema>`.
-* **Dynamic Multi-Tier Routing**: Route by task alias (`code`, `fast`, `reasoning`, `local`), direct provider target (`'openai/gpt-4o'`), or custom routing hooks with reliable offline fallback.
+* **First-Class Local LLM Support**: Native Ollama provider with `/api/chat`, host auto-detection (`OLLAMA_HOST` / `LOCAL_LLM_URL`), model discovery via `/api/tags`, and `preferLocal` routing to run 100% offline & private.
+* **OpenAI-Compatible Local Servers**: Seamlessly connect to vLLM, LM Studio, LocalAI, or llama.cpp servers via custom `baseUrl`.
+* **Zero-Ceremony Setup**: Automatically reads `OPENAI_API_KEY`, `GEMINI_API_KEY` / `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, `OLLAMA_HOST`, and `LOCAL_LLM_URL` from `process.env`.
+* **Automatic Typed JSON (`asker.json()`)**: Injects provider-native schema, strips markdown fences, repairs malformed JSON with `jsonrepair` (crucial for small local models like 3B/7B), and returns inferred `data: z.infer<typeof schema>`.
+* **Dynamic Multi-Tier Routing**: Route by task alias (`code`, `fast`, `reasoning`, `local`), direct provider target (`'openai/gpt-4o'`), bare model name (`'llama3.2'`, `'deepseek-r1'`, `'qwen2.5-coder'`), or custom routing hooks.
 * **Fatal-Provider Circuit Breaker**: Prevents redundant calls after fatal failures (e.g., quota or auth exhaustion).
 * **Plug-and-Play Extensibility**: Standard interfaces for [`@dharmax/context-manager`](../context-manager), [`@dharmax/pubsub`](../pubsub), and custom storage sinks.
-* **Instance-Owned State**: No hidden static singletons; test runs and separate clients never leak state.
 
 ---
 
@@ -27,62 +28,91 @@ npm install @dharmax/llm-utils zod
 
 ---
 
-## Quickstart
+## Local LLM Workflows
 
-### 1. Direct Text Generation
+### 1. Direct Local Asks (`asker.local()`)
+
+Execute offline prompts directly on your local Ollama instance:
 
 ```ts
 import { Asker } from '@dharmax/llm-utils'
 
 const asker = new Asker()
 
-const result = await asker.ask('Explain quantum computing in one sentence.')
-if (result.ok) {
-    console.log(result.text)
-    console.log(result.model) // { providerId: 'google', modelId: 'gemini-2.0-flash' }
-}
+// Automatically routes to local Ollama (llama3.2 by default)
+const result = await asker.local('Summarize this private document.')
+console.log(result.text)
 ```
 
----
+### 2. Bare Local Model Recognition
 
-### 2. Automatic Typed Structured JSON
+Specify any open model name directly without provider prefixes:
+
+```ts
+// Automatically routed to Ollama:
+await asker.ask('Write Python quicksort', { model: 'qwen2.5-coder:7b' })
+await asker.ask('Analyze query plan', { model: 'deepseek-r1:8b' })
+await asker.ask('Explain rust lifetimes', { model: 'phi4' })
+```
+
+### 3. Local Structured JSON (with automatic repair)
+
+Smaller local models (3B / 7B) often produce minor JSON syntax defects. `@dharmax/llm-utils` automatically extracts markdown code blocks and repairs malformed output locally with `jsonrepair` before running strict Zod validation:
 
 ```ts
 import { Asker, z } from '@dharmax/llm-utils'
 
 const asker = new Asker()
 
-const bookSchema = z.object({
-    title: z.string(),
-    author: z.string(),
-    summary: z.string(),
-    tags: z.array(z.string()),
+const schema = z.object({
+    sentiment: z.enum(['positive', 'neutral', 'negative']),
+    confidence: z.number().min(0).max(1),
 })
 
-// Automatically inferred as { title: string; author: string; summary: string; tags: string[] }
-const result = await asker.json('Summarize Dune as JSON.', bookSchema)
+const result = await asker.json('Analyze customer feedback: Great product!', schema, {
+    model: 'llama3.2:3b',
+})
 
 if (result.ok && result.data) {
-    console.log(result.data.title)
-    console.log(result.data.tags)
+    console.log(result.data.sentiment) // "positive"
 }
+```
+
+### 4. Custom Local Endpoints (LM Studio / vLLM / llama.cpp)
+
+```ts
+const asker = new Asker({
+    providers: {
+        lmstudio: {
+            id: 'lmstudio',
+            baseUrl: 'http://127.0.0.1:1234/v1',
+            available: true,
+        },
+    },
+})
+
+await asker.ask('Hello from local server', { model: 'lmstudio/local-model' })
 ```
 
 ---
 
-### 3. Model Routing & Exact Overrides
+## Cloud Providers & Routing
 
-Route by task alias or target specific providers/models directly:
+### Direct Remote Generation
 
 ```ts
-// 1. Route by task alias:
-await asker.ask('Write a fast HTTP server in Go', { task: 'code' })
+import { Asker, z } from '@dharmax/llm-utils'
 
-// 2. Exact provider/model override:
-await asker.ask('Hello from Claude', { model: 'anthropic/claude-3-7-sonnet' })
+const asker = new Asker()
 
-// 3. Local Ollama execution:
-await asker.ask('Private summary', { model: 'ollama/llama3.2' })
+// 1. Direct ask:
+const result = await asker.ask('Hello world')
+
+// 2. Routed by task:
+const code = await asker.ask('Write an LRU cache in TypeScript', { task: 'code' })
+
+// 3. Exact remote override:
+const claude = await asker.ask('Creative story', { model: 'anthropic/claude-3-7-sonnet' })
 ```
 
 #### Default Task Routes:
@@ -92,20 +122,9 @@ await asker.ask('Private summary', { model: 'ollama/llama3.2' })
 * `creative` &rarr; `anthropic/claude-3-7-sonnet`
 * `local` &rarr; `ollama/llama3.2`
 
-You can customize task routes during instantiation:
-
-```ts
-const asker = new Asker({
-    routes: {
-        'code': 'anthropic/claude-3-7-sonnet',
-        'fast': 'google/gemini-2.0-flash',
-    },
-})
-```
-
 ---
 
-### 4. Prompt Templates & Context Injection
+## Prompt Templates & Context Injection
 
 `PromptEngine` loads templates with optional JSON frontmatter and renders `{{ variables }}`:
 
@@ -131,7 +150,7 @@ const result = await asker.prompt('code-review', {
 
 ---
 
-### 5. Multi-Turn Session Memory
+## Multi-Turn Session Memory
 
 ```ts
 import { Asker, LLMSession } from '@dharmax/llm-utils'
@@ -139,15 +158,15 @@ import { Asker, LLMSession } from '@dharmax/llm-utils'
 const asker = new Asker()
 const session = new LLMSession(asker)
 
-await session.prompt('assistant', { inputText: 'My name is Alice.' })
-const response = await session.prompt('assistant', { inputText: 'What is my name?' })
+await session.ask('My name is Alice.')
+const response = await session.ask('What is my name?')
 
 console.log(response.text) // "Your name is Alice."
 ```
 
 ---
 
-### 6. Metrics & PubSub Event Broadcasting
+## Metrics & PubSub Event Broadcasting
 
 ```ts
 import { LlmMetrics, createMetricsPubSub } from '@dharmax/llm-utils'
@@ -186,7 +205,7 @@ export type { GenerationResult, ModelTarget, AskOptions, ProviderConfig } from '
 
 // Utilities & Engines
 export { CompletionEngine, ModelRouter, PromptEngine, ProviderCircuit, LlmMetrics, LLMSession } from '@dharmax/llm-utils'
-export { parseStructuredJson, parseStructuredJsonResult, zodToJsonSchema } from '@dharmax/llm-utils'
+export { parseStructuredJson, parseStructuredJsonResult, zodToJsonSchema, ProviderDiscovery } from '@dharmax/llm-utils'
 ```
 
 ---
@@ -196,7 +215,7 @@ export { parseStructuredJson, parseStructuredJsonResult, zodToJsonSchema } from 
 ```sh
 npm run build      # Bundles with esbuild and emits declaration files
 npm run typecheck  # Strict TypeScript check
-npm test           # Executes test suite (24 tests)
+npm test           # Executes test suite (25 tests)
 npm run check      # Typecheck + tests
 ```
 

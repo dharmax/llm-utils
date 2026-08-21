@@ -127,15 +127,18 @@ test('provider HTTP failures preserve typed quota evidence', async () => {
 test('PromptEngine loads multipart templates, parses JSON frontmatter, and renders variables', async () => {
     const engine = new PromptEngine(new MemoryTemplateSource({
         'greeting.system': '--- json\n{"format":"json"}\n---\nSystem rules',
-        'greeting.prompt': 'Hello {{ name }}<!-- hidden -->',
+        'greeting.prompt': 'Hello {{ name }}<!-- hidden --> | User: {{ user }}',
     }))
 
     const loaded = await engine.load('greeting')
 
-    assert.equal(loaded.content, 'Hello {{ name }}')
+    assert.equal(loaded.content, 'Hello {{ name }} | User: {{ user }}')
     assert.equal(loaded.manifest.system, 'System rules')
     assert.equal(loaded.manifest.format, 'json')
-    assert.equal(engine.render(loaded.content, {name: 'Ada'}), 'Hello Ada')
+    assert.equal(
+        engine.render(loaded.content, {name: 'Ada', user: {id: 1, role: 'admin'}}),
+        'Hello Ada | User: {\n  "id": 1,\n  "role": "admin"\n}',
+    )
 })
 
 test('Asker executes direct ask with model routing', async () => {
@@ -156,6 +159,40 @@ test('Asker executes direct ask with model routing', async () => {
     assert.equal(result.text.includes('prompt:ping'), true)
     assert.equal(result.text.includes('system:be terse'), true)
     assert.deepEqual(result.model, {providerId, modelId: 'model-1'})
+})
+
+test('Asker.ask infers provider from bare model names and local models', async () => {
+    const targets = []
+    const completion = new CompletionEngine([]).registerAdapter({
+        id: 'openai',
+        async generate(options) {
+            targets.push({providerId: 'openai', modelId: options.modelId})
+            return {ok: true, text: 'ok', model: {providerId: 'openai', modelId: options.modelId}}
+        },
+    }).registerAdapter({
+        id: 'ollama',
+        async generate(options) {
+            targets.push({providerId: 'ollama', modelId: options.modelId})
+            return {ok: true, text: 'ok', model: {providerId: 'ollama', modelId: options.modelId}}
+        },
+    })
+
+    const asker = new Asker({
+        providers: {
+            openai: {id: 'openai', available: true},
+            ollama: {id: 'ollama', available: true},
+        },
+        completion,
+    })
+
+    await asker.ask('hello', {model: 'gpt-4o'})
+    assert.deepEqual(targets[0], {providerId: 'openai', modelId: 'gpt-4o'})
+
+    await asker.ask('local task', {model: 'qwen2.5-coder:7b'})
+    assert.deepEqual(targets[1], {providerId: 'ollama', modelId: 'qwen2.5-coder:7b'})
+
+    await asker.local('local prompt')
+    assert.deepEqual(targets[2], {providerId: 'ollama', modelId: 'llama3.2'})
 })
 
 test('Asker.json executes, parses, repairs, and returns typed data', async () => {
@@ -213,7 +250,7 @@ test('Asker.prompt loads template, resolves context, and executes', async () => 
     assert.equal(result.text.includes('system:Stay grounded'), true)
 })
 
-test('LLMSession records history and metrics across turns', async () => {
+test('LLMSession records history and metrics across ask and prompt turns', async () => {
     const providerId = 'unit-session'
     const completion = registerEchoAdapter(providerId)
     const promptEngine = new PromptEngine(new MemoryTemplateSource({
@@ -228,14 +265,15 @@ test('LLMSession records history and metrics across turns', async () => {
     })
 
     const session = new LLMSession(asker)
-    const result = await session.prompt('reply', {inputText: 'Hello there'})
-    const context = session.getContext()
+    const askResult = await session.ask('Direct chat message')
+    assert.equal(askResult.ok, true)
+    assert.equal(session.getHistory().length, 2)
 
-    assert.equal(result.ok, true)
-    assert.equal(typeof result.latencyMs, 'number')
-    assert.equal(context.history.length, 2)
-    assert.equal(context.history[0].content, 'Hello there')
-    assert.equal(context.metadata.totalTokens, 8)
+    const promptResult = await session.prompt('reply', {inputText: 'Hello there'})
+    assert.equal(promptResult.ok, true)
+    assert.equal(typeof promptResult.latencyMs, 'number')
+    assert.equal(session.getHistory().length, 4)
+    assert.equal(session.getContext().metadata.turnCount, 2)
 })
 
 test('LlmMetrics aggregates totals, groupings, and pubsub events', () => {
@@ -277,6 +315,15 @@ test('LlmMetrics aggregates totals, groupings, and pubsub events', () => {
     assert.equal(totals.failures, 1)
     assert.equal(totals.successRate, 50)
     assert.equal(received.providerId, 'openai')
+
+    const byProv = metrics.byProvider()
+    assert.equal(byProv.length, 1)
+    assert.equal(byProv[0].providerId, 'openai')
+    assert.equal(byProv[0].metrics.calls, 2)
+
+    const byMod = metrics.byModel()
+    assert.equal(byMod.length, 1)
+    assert.equal(byMod[0].modelId, 'gpt-4o-mini')
 })
 
 test('ProviderDiscovery auto-detects and normalizes ollama host', async () => {
@@ -308,14 +355,23 @@ test('ProviderDiscovery auto-detects and normalizes ollama host', async () => {
     }
 })
 
-test('ModelRouter resolves explicit targets and task aliases', () => {
+test('ModelRouter resolves explicit targets, bare models, and custom router functions', () => {
     const router = new ModelRouter({
         routes: {
             'custom-task': 'openai/gpt-4o',
         },
+        router: (task) => {
+            if (task === 'dynamic')
+                return 'anthropic/claude-3-7-sonnet'
+            return undefined
+        },
     })
 
     assert.deepEqual(router.resolve('openai/gpt-4o'), {providerId: 'openai', modelId: 'gpt-4o'})
+    assert.deepEqual(router.resolve('claude-3-7-sonnet'), {providerId: 'anthropic', modelId: 'claude-3-7-sonnet'})
+    assert.deepEqual(router.resolve('gemini-2.0-flash'), {providerId: 'google', modelId: 'gemini-2.0-flash'})
+    assert.deepEqual(router.resolve('deepseek-r1'), {providerId: 'ollama', modelId: 'deepseek-r1'})
     assert.deepEqual(router.resolve('custom-task'), {providerId: 'openai', modelId: 'gpt-4o'})
-    assert.deepEqual(router.resolve(undefined, ['google']), {providerId: 'google', modelId: 'gemini-2.0-flash'})
+    assert.deepEqual(router.resolve('dynamic'), {providerId: 'anthropic', modelId: 'claude-3-7-sonnet'})
+    assert.deepEqual(router.resolve(undefined, ['ollama'], true), {providerId: 'ollama', modelId: 'llama3.2'})
 })

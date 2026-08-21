@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-    AnthropicAdapter,
     Asker,
     CompletionEngine,
     extractJsonCandidate,
@@ -11,7 +10,6 @@ import {
     parseStructuredJson,
     parseStructuredJsonResult,
     resolveResponseFormat,
-    StructuredJsonError,
     z,
     zodToJsonSchema,
 } from '../dist/index.mjs'
@@ -47,7 +45,7 @@ test('deterministically repairs malformed object-shaped JSON using jsonrepair', 
 })
 
 test('rejects unrecoverable JSON, prose, and scalar JSON roots', () => {
-    for (const raw of ['only prose', '"json string"', '42', 'true']) {
+    for (const raw of ['', '   ', 'only prose', '"json string"', '42', 'true']) {
         const result = parseStructuredJsonResult(raw)
         assert.equal(result.ok, false, raw)
         assert.equal(result.kind, 'parse_failed', raw)
@@ -84,7 +82,7 @@ test('resolveResponseFormat maps schema to json_schema format', () => {
     assert.equal(format.name, 'my_schema')
 })
 
-test('OpenAI, Google, and Ollama format payloads correctly', async () => {
+test('OpenAI, Google, and Ollama format payloads and normalize URLs correctly', async () => {
     const originalFetch = globalThis.fetch
     const calls = []
 
@@ -101,7 +99,7 @@ test('OpenAI, Google, and Ollama format payloads correctly', async () => {
                 candidates: [{content: {parts: [{text: '{"value":"google"}'}]}}],
             }))
         }
-        return new Response(JSON.stringify({response: '{"value":"ollama"}'}))
+        return new Response(JSON.stringify({message: {content: '{"value":"ollama"}'}}))
     }
 
     try {
@@ -111,27 +109,31 @@ test('OpenAI, Google, and Ollama format payloads correctly', async () => {
             schema: {type: 'object', properties: {value: {type: 'string'}}},
         }
 
+        // Test with trailing slash in baseUrl to verify URL normalization
         await new OpenAIAdapter().generate({
             modelId: 'gpt-4o',
             prompt: 'hi',
-            config: {id: 'openai', apiKey: 'key'},
+            config: {id: 'openai', apiKey: 'key', baseUrl: 'https://api.openai.com/v1/'},
             format,
         })
         await new GoogleAdapter().generate({
-            modelId: 'gemini-flash',
+            modelId: 'models/gemini-flash',
             prompt: 'hi',
-            config: {id: 'google', apiKey: 'key'},
+            config: {id: 'google', apiKey: 'key', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/'},
             format,
         })
         await new OllamaProvider().generate({
             modelId: 'llama3',
             prompt: 'hi',
-            config: {id: 'ollama', host: 'localhost'},
+            config: {id: 'ollama', host: 'http://localhost:11434/'},
             format,
         })
 
+        assert.equal(calls[0].url, 'https://api.openai.com/v1/chat/completions')
         assert.equal(calls[0].body.response_format.type, 'json_schema')
+        assert.equal(calls[1].url.includes('models/gemini-flash:generateContent'), true)
         assert.equal(calls[1].body.generationConfig.responseMimeType, 'application/json')
+        assert.equal(calls[2].url, 'http://localhost:11434/api/chat')
         assert.deepEqual(calls[2].body.format, format.schema)
     } finally {
         globalThis.fetch = originalFetch

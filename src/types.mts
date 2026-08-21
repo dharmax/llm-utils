@@ -87,6 +87,7 @@ export interface GenerateOptions {
     format?: ResponseFormat | undefined
     temperature?: number | undefined
     signal?: AbortSignal | null | undefined
+    timeoutMs?: number | undefined
 }
 
 export interface ProviderAdapter {
@@ -105,7 +106,9 @@ export interface AskOptions<T = unknown> {
     schema?: ZodType<T> | undefined
     system?: string | undefined
     temperature?: number | undefined
+    preferLocal?: boolean | undefined
     signal?: AbortSignal | null | undefined
+    timeoutMs?: number | undefined
     maxRetries?: number | undefined
     providerConfig?: ProviderConfig | undefined
 }

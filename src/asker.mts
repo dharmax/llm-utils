@@ -21,6 +21,7 @@ export interface AskerOptions {
     providerState?: {providers: Record<string, ProviderConfig>} | undefined
     router?: ModelRouter | undefined
     routes?: Record<string, string | ModelTarget> | undefined
+    preferLocal?: boolean | undefined
     completion?: CompletionEngine | undefined
     promptEngine?: PromptEngine | undefined
     context?: ContextResolver | undefined
@@ -34,16 +35,19 @@ export class Asker {
     private readonly router: ModelRouter
     private readonly circuit: ProviderCircuit
     private readonly defaultContext: ContextResolver | undefined
+    private readonly preferLocal: boolean
 
     constructor(options: AskerOptions = {}) {
         this.completion = options.completion ?? new CompletionEngine()
         this.promptEngine = options.promptEngine ?? new PromptEngine()
         this.circuit = options.circuit ?? new ProviderCircuit()
         this.defaultContext = options.context
+        this.preferLocal = Boolean(options.preferLocal)
 
         // Configure router
         this.router = options.router ?? new ModelRouter({
             routes: options.routes,
+            preferLocal: this.preferLocal,
         })
 
         // Configure providers (with environment variable auto-discovery)
@@ -59,10 +63,11 @@ export class Asker {
         } else {
             // Synchronous discovery from process.env
             const env = typeof process !== 'undefined' ? process.env : {}
+            const ollamaHost = env.OLLAMA_HOST ?? env.LOCAL_LLM_URL ?? 'http://127.0.0.1:11434'
             const discovered: Record<string, ProviderConfig> = {
                 ollama: {
                     id: 'ollama',
-                    host: env.OLLAMA_HOST ?? 'http://127.0.0.1:11434',
+                    host: ollamaHost,
                     available: true,
                     local: true,
                 },
@@ -70,11 +75,12 @@ export class Asker {
                     id: 'openai',
                     apiKey: env.OPENAI_API_KEY,
                     baseUrl: env.OPENAI_BASE_URL,
-                    available: Boolean(env.OPENAI_API_KEY),
+                    available: Boolean(env.OPENAI_API_KEY || env.OPENAI_BASE_URL),
                 },
                 google: {
                     id: 'google',
                     apiKey: env.GEMINI_API_KEY ?? env.GOOGLE_API_KEY,
+                    baseUrl: env.GEMINI_BASE_URL,
                     available: Boolean(env.GEMINI_API_KEY ?? env.GOOGLE_API_KEY),
                 },
                 anthropic: {
@@ -120,7 +126,11 @@ export class Asker {
         options: AskOptions<T> = {},
     ): Promise<GenerationResult<T>> {
         const available = [...this.providers.keys()]
-        const target = this.router.resolve(options.model ?? options.task, available)
+        const target = this.router.resolve(
+            options.model ?? options.task,
+            available,
+            options.preferLocal ?? this.preferLocal,
+        )
         const config = options.providerConfig
             ?? this.providers.get(target.providerId)
             ?? {id: target.providerId}
@@ -139,6 +149,7 @@ export class Asker {
                     temperature: options.temperature,
                     format,
                     signal: options.signal,
+                    timeoutMs: options.timeoutMs,
                 },
             ))
             return res as GenerationResult<T>
@@ -193,6 +204,16 @@ export class Asker {
         options: Omit<AskOptions<T>, 'schema'> = {},
     ): Promise<GenerationResult<T>> {
         return this.ask(prompt, {...options, schema})
+    }
+
+    /**
+     * Convenience method for local-only execution (defaults to Ollama / local models).
+     */
+    async local<T = unknown>(
+        prompt: string,
+        options: AskOptions<T> = {},
+    ): Promise<GenerationResult<T>> {
+        return this.ask(prompt, {...options, preferLocal: true})
     }
 
     /**

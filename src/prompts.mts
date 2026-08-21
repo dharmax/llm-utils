@@ -56,7 +56,11 @@ export class PromptEngine {
     render(template: string, variables: Record<string, unknown> = {}): string {
         return template.replace(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g, (_match, key: string) => {
             const val = variables[key]
-            return val !== undefined && val !== null ? String(val) : ''
+            if (val === undefined || val === null)
+                return ''
+            if (typeof val === 'object')
+                return JSON.stringify(val, null, 2)
+            return String(val)
         })
     }
 }
