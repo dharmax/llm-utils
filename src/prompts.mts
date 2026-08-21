@@ -9,16 +9,21 @@ export class PromptEngine {
     constructor(private readonly source: TemplateSource = {}) {}
 
     async load(name: string): Promise<PromptTemplate> {
-        const load = this.source.fetch ?? this.source.load ?? (async () => '')
-        const system = this.parse(await load.call(this.source, `${name}.system`).catch(() => ''))
-        const prompt = this.parse(await load.call(this.source, `${name}.prompt`).catch(() => ''))
+        const loader = this.source.fetch ?? this.source.load ?? (async () => '')
+        const systemRaw = await loader.call(this.source, `${name}.system`).catch(() => '')
+        const promptRaw = await loader.call(this.source, `${name}.prompt`).catch(() => '')
+
+        const system = this.parse(systemRaw)
+        const prompt = this.parse(promptRaw || systemRaw)
+
+        const systemInstruction = system.content || (typeof system.manifest.system === 'string' ? system.manifest.system : undefined)
 
         return {
             content: prompt.content,
             manifest: {
                 ...system.manifest,
                 ...prompt.manifest,
-                system: system.content,
+                ...(systemInstruction ? {system: systemInstruction} : {}),
             },
         }
     }
@@ -29,12 +34,14 @@ export class PromptEngine {
 
         let manifest: Record<string, unknown> = {}
         let content = raw
-        const match = raw.match(/^---\s*json\s*\r?\n([\s\S]*?)\r?\n---\s*\r?\n/)
-        if (match?.[1]) {
+
+        const frontmatterMatch = raw.match(/^---\s*(?:json)?\s*\r?\n([\s\S]*?)\r?\n---\s*\r?\n/)
+        if (frontmatterMatch?.[1]) {
             try {
-                const parsed: unknown = JSON.parse(match[1])
-                manifest = isRecord(parsed) ? parsed : {}
-                content = raw.slice(match[0].length)
+                const parsed = JSON.parse(frontmatterMatch[1])
+                if (typeof parsed === 'object' && parsed !== null)
+                    manifest = parsed as Record<string, unknown>
+                content = raw.slice(frontmatterMatch[0].length)
             } catch {
                 manifest = {}
             }
@@ -47,19 +54,9 @@ export class PromptEngine {
     }
 
     render(template: string, variables: Record<string, unknown> = {}): string {
-        let rendered = template
-        for (const [key, value] of Object.entries(variables)) {
-            const pattern = new RegExp(`\\{\\{[ \\t]*${escapeRegExp(key)}[ \\t]*\\}\\}`, 'g')
-            rendered = rendered.replace(pattern, String(value ?? ''))
-        }
-        return rendered
+        return template.replace(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g, (_match, key: string) => {
+            const val = variables[key]
+            return val !== undefined && val !== null ? String(val) : ''
+        })
     }
-}
-
-function escapeRegExp(value: string): string {
-    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-    return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

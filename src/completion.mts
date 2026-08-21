@@ -7,30 +7,28 @@ import {
 import type {
     GenerateOptions,
     GenerationResult,
-    LlmFailure,
-    ModelInfo,
+    ModelTarget,
     ProviderAdapter,
     ProviderConfig,
     ResponseFormat,
 } from './types.mts'
 
 export interface CompletionOptions {
-    system?: string
-    temperature?: number
-    format?: ResponseFormat
-    signal?: AbortSignal | null
+    system?: string | undefined
+    temperature?: number | undefined
+    format?: ResponseFormat | undefined
+    signal?: AbortSignal | null | undefined
 }
 
 export function builtInAdapters(): ProviderAdapter[] {
     return [
-        new OllamaProvider(),
         new OpenAIAdapter(),
         new GoogleAdapter(),
         new AnthropicAdapter(),
+        new OllamaProvider(),
     ]
 }
 
-/** Dispatches generation to instance-owned provider adapters. */
 export class CompletionEngine {
     private readonly adapters = new Map<string, ProviderAdapter>()
 
@@ -50,57 +48,50 @@ export class CompletionEngine {
 
     async generate(
         prompt: string,
-        model: ModelInfo,
+        model: ModelTarget,
         config: ProviderConfig,
         options: CompletionOptions = {},
     ): Promise<GenerationResult> {
         const adapter = this.adapters.get(model.providerId)
-        if (!adapter)
-            return failedGeneration(model, {
-                kind: 'unsupported',
-                message: `Unsupported provider for completion: ${model.providerId}`,
-                retryable: false,
-                fatal: true,
-            })
+        if (!adapter) {
+            return {
+                ok: false,
+                text: '',
+                model,
+                failure: {
+                    kind: 'unsupported',
+                    message: `No adapter registered for provider: ${model.providerId}`,
+                    retryable: false,
+                    fatal: true,
+                },
+            }
+        }
 
         const generateOptions: GenerateOptions = {
-            modelId: model.id,
+            modelId: model.modelId,
             prompt,
             config,
-            ...(options.system === undefined ? {} : {system: options.system}),
-            ...(options.temperature === undefined ? {} : {temperature: options.temperature}),
-            ...(options.format === undefined ? {} : {format: options.format}),
-            ...(options.signal === undefined ? {} : {signal: options.signal}),
+            system: options.system,
+            temperature: options.temperature,
+            format: options.format,
+            signal: options.signal,
         }
 
         try {
             return await adapter.generate(generateOptions)
-        } catch (cause) {
-            return failedGeneration(model, {
-                kind: 'provider',
-                message: `Adapter failed unexpectedly: ${errorMessage(cause)}`,
-                retryable: false,
-                fatal: true,
-                raw: cause,
-            })
+        } catch (err) {
+            return {
+                ok: false,
+                text: '',
+                model,
+                failure: {
+                    kind: 'provider',
+                    message: err instanceof Error ? err.message : String(err),
+                    retryable: false,
+                    fatal: true,
+                    raw: err,
+                },
+            }
         }
     }
-}
-
-function failedGeneration(model: ModelInfo, failure: LlmFailure): GenerationResult {
-    return {
-        text: '',
-        ok: false,
-        failure,
-        error: failure.message,
-        err: failure.message,
-        model: {
-            providerId: model.providerId,
-            modelId: model.id,
-        },
-    }
-}
-
-function errorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : String(error)
 }

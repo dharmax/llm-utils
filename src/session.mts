@@ -1,52 +1,79 @@
-import {Asker} from './asker.mts'
-import {ContextCompressor} from './context.mts'
+import type {Asker} from './asker.mts'
 import {MetricsEngine} from './metrics.mts'
-import type {GenerationResult, SessionContext} from './types.mts'
+import type {GenerationResult} from './types.mts'
+
+export interface SessionMessage {
+    role: 'user' | 'ai' | 'system'
+    content: string
+}
+
+export interface SessionContext {
+    history: SessionMessage[]
+    metadata?: Record<string, number> | undefined
+}
 
 export class LLMSession {
-    private context: SessionContext
+    private history: SessionMessage[] = []
     private readonly metrics: MetricsEngine
 
-  constructor(
+    constructor(
         private readonly asker: Asker,
-        private readonly toolkit: Record<string, unknown> = {},
-        initialContext?: SessionContext,
+        private readonly options: {
+            initialHistory?: SessionMessage[] | undefined
+            maxHistory?: number | undefined
+            system?: string | undefined
+        } = {},
     ) {
-        this.context = initialContext ?? {history: []}
+        if (options.initialHistory)
+            this.history = [...options.initialHistory]
         this.metrics = new MetricsEngine()
     }
 
     async prompt(
         templateName: string,
-        data: Record<string, unknown>,
+        data: Record<string, unknown> = {},
     ): Promise<GenerationResult> {
-        this.context.managedContext = ContextCompressor.densify(this.context.history)
         const enrichedData = {
             ...data,
-            ...this.toolkit,
-            history: this.context.history,
-            managedContext: this.context.managedContext,
+            history: this.history,
         }
 
         const startedAt = Date.now()
-        const result = await this.asker.prompt(templateName, this.toolkit, enrichedData)
+        const result = await this.asker.prompt(templateName, enrichedData, {
+            system: this.options.system,
+        })
         const latencyMs = Date.now() - startedAt
 
         if (result.ok) {
             this.metrics.record(result, latencyMs)
-            this.context.metrics = this.metrics.getReport()
-            this.context.history.push({
-                role: 'user',
-                content: typeof data.inputText === 'string' ? data.inputText : 'Prompt',
-            })
-            this.context.history.push({role: 'ai', content: result.text})
-            this.context.history = this.context.history.slice(-20)
+            const userContent = typeof data.inputText === 'string'
+                ? data.inputText
+                : typeof data.prompt === 'string'
+                    ? data.prompt
+                    : 'Prompt'
+            this.history.push({role: 'user', content: userContent})
+            this.history.push({role: 'ai', content: result.text})
+
+            const max = this.options.maxHistory ?? 50
+            if (this.history.length > max)
+                this.history = this.history.slice(-max)
         }
 
         return {...result, latencyMs}
     }
 
+    getHistory(): SessionMessage[] {
+        return [...this.history]
+    }
+
     getContext(): SessionContext {
-        return this.context
+        return {
+            history: this.getHistory(),
+            metadata: this.metrics.getReport(),
+        }
+    }
+
+    clear(): void {
+        this.history = []
     }
 }

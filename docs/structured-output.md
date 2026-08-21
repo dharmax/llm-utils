@@ -1,94 +1,97 @@
-# Structured output
+# Structured JSON Output & Validation
 
-`@dharmax/llm-utils` owns generic structured LLM-output behavior. Applications
-retain prompt wording, model selection, budgets, provider policy, journals, and
-application-specific schemas.
+`@dharmax/llm-utils` provides an ultra-reliable, strictly typed structured output pipeline that combines provider-native JSON Schema enforcement, automatic markdown stripping, deterministic repair with `jsonrepair`, and local validation via Zod.
 
-## Asker API
+---
 
-Use structured output through the normal client:
+## 1. Using `asker.json()`
+
+The simplest and recommended way to request typed structured responses:
 
 ```ts
-const result = await asker.askJson('Return an answer as JSON.', 'analysis', {
-    schema: z.object({answer: z.string()}),
+import { Asker, z } from '@dharmax/llm-utils'
+
+const asker = new Asker()
+
+const TaskListSchema = z.object({
+    project: z.string(),
+    tasks: z.array(z.object({
+        id: z.string(),
+        title: z.string(),
+        priority: z.enum(['low', 'medium', 'high']),
+    })),
+})
+
+const result = await asker.json('Generate 3 tasks for building a login page', TaskListSchema)
+
+if (result.ok && result.data) {
+    // result.data is fully inferred as { project: string; tasks: Array<{ id: string; title: string; priority: 'low' | 'medium' | 'high' }> }
+    for (const task of result.data.tasks) {
+        console.log(`[${task.priority.toUpperCase()}] ${task.title}`)
+    }
+}
+```
+
+---
+
+## 2. Pipeline Execution Steps
+
+```
+Prompt + Zod Schema
+        │
+        ▼
+[1. Provider Native Formatting] ──► Sets OpenAI response_format / Gemini responseJsonSchema
+        │
+        ▼
+[2. Raw Response Extraction]   ──► Strips markdown code blocks (```json ... ```) or trims prose
+        │
+        ▼
+[3. JSON Parse & Repair]       ──► Native JSON.parse() → On failure, falls back to jsonrepair()
+        │
+        ▼
+[4. Zod Schema Validation]     ──► Runs schema.safeParse()
+        │
+        ├─► Valid   ──► Returns { ok: true, data: T }
+        └─► Invalid ──► If maxRetries > 0, performs bounded correction retry with diagnostic errors
+```
+
+---
+
+## 3. Direct Parsing Functions
+
+If you have a raw string from an external LLM call and want to parse and validate it:
+
+```ts
+import { parseStructuredJson, parseStructuredJsonResult, z } from '@dharmax/llm-utils'
+
+const schema = z.object({ count: z.number() })
+
+// 1. Throwing variant:
+try {
+    const data = parseStructuredJson('{count: 42}', schema)
+    console.log(data.count) // 42 (repaired and validated)
+} catch (err) {
+    console.error(err.message)
+}
+
+// 2. Safe result variant:
+const res = parseStructuredJsonResult('{count: 42}', schema)
+if (res.ok) {
+    console.log(res.data.count)
+} else {
+    console.error(res.message) // Detailed path and issue breakdown
+}
+```
+
+---
+
+## 4. Bounded Correction Retries
+
+When validation fails on subtle constraints (e.g., regex, enum values, min lengths), pass `maxRetries` to automatically retry with the model:
+
+```ts
+const result = await asker.ask('Generate a user profile JSON', {
+    schema: UserProfileSchema,
+    maxRetries: 2, // Retries up to 2 times feeding validation error diagnostics back to the model
 })
 ```
-
-For templates, use `asker.promptJson(templateName, data, {schema})`. Exact
-provider/model selection is available through `askJsonExact` and
-`promptJsonExact`. These methods wrap their ordinary Asker counterparts, infer
-`result.data` from the schema, choose JSON transport, repair the response
-locally, and validate it. Advanced callers may provide `correct` and
-`maxCorrectionAttempts` without leaving the Asker API.
-
-`requestStructuredJson` remains the lower-level API for transport adapters.
-
-## Validation and provider schemas
-
-Import `z` from this package:
-
-```ts
-import {z} from '@dharmax/llm-utils'
-
-const schema = z.object({answer: z.string()})
-```
-
-The Zod schema is always the final local authority. `resolveStructuredOutput`
-converts it with `z.toJSONSchema()` only when the schema has no behavior that
-provider JSON Schema cannot enforce safely. Conversion never uses
-`unrepresentable: 'any'`.
-
-Transforms, preprocessors, and custom refinements cause generic JSON fallback.
-An application may supply a separate `providerSchema` override when it has an
-accurate transport schema for a more complex validation schema.
-
-The returned plan records whether the provider schema was automatic, explicit,
-or unavailable. Provider adapters additionally record whether native JSON
-Schema transport was actually used.
-
-## Provider transport
-
-- OpenAI Chat Completions uses `response_format.json_schema`.
-- Google GenerateContent uses `responseMimeType: application/json` and
-  `responseJsonSchema`.
-- Ollama `/api/generate` uses the JSON Schema object in `format`.
-- Anthropic keeps its existing text transport; a schema request records a
-  `provider_unsupported` fallback instead of inventing tool behavior.
-
-Legacy `format: 'text' | 'json'` remains supported. New callers may use
-`{type: 'text'}`, `{type: 'json'}`, or
-`{type: 'json_schema', name, schema, strict}`.
-
-## Parsing
-
-Only object and array roots are accepted. Candidate priority is:
-
-1. fenced JSON blocks in response order;
-2. the complete response when it is object- or array-shaped;
-3. balanced object/array candidates in source order.
-
-Balanced extraction respects quoted strings and escapes. Direct parsing runs
-before deterministic `jsonrepair`. Repair is attempted only for object- or
-array-shaped candidates. With a Zod schema, parsing continues past a parseable
-but invalid candidate and accepts the first candidate that validates.
-
-Failures preserve structured parse/repair diagnostics, Zod issues, and the
-original `ZodError`. `validateStructuredValue` applies the same Zod authority to
-already-parsed checkpoint or persisted data without repairing it.
-
-## Corrective calls and counts
-
-`requestStructuredJson` performs exactly one substantive callback. Local
-extraction and deterministic repair do not consume correction attempts.
-
-When `correct` is supplied, `maxCorrectionAttempts` is the number of additional
-corrective callback invocations after the initial response. Each callback
-receives the failed raw response, failure kind, structured diagnostics, Zod
-issues/error, correction number, validation schema, provider schema, and
-response format. The package never constructs a repair prompt or injects the
-raw response into one.
-
-A provider failure returns `model_failed` immediately and is never treated as a
-schema correction. Results report exact `substantiveCalls` and
-`correctiveCalls`, all generation results, the accepted or relevant raw
-response, and whether provider-native JSON Schema was used.

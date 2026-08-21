@@ -2,13 +2,13 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
     Asker,
+    calculateUsageCost,
     CompletionEngine,
     ProviderCircuit,
-    calculateUsageCost,
     z,
 } from '../dist/index.mjs'
 
-test('Asker.askJson executes and validates once with an inferred schema result', async () => {
+test('Asker.json executes and validates with an inferred schema result', async () => {
     let calls = 0
     const completion = new CompletionEngine([]).registerAdapter({
         id: 'mock',
@@ -22,22 +22,20 @@ test('Asker.askJson executes and validates once with an inferred schema result',
         },
     })
     const asker = new Asker({
-        providerState: {providers: {mock: {id: 'mock'}}},
+        providers: {mock: {id: 'mock', available: true}},
         completion,
     })
-    const result = await asker.askJson('Return JSON.', 'test', {
-        schema: z.object({value: z.literal(7)}),
-        providerId: 'mock',
-        modelId: 'exact',
+    const result = await asker.json('Return JSON.', z.object({value: z.literal(7)}), {
+        model: 'mock/exact',
     })
 
     assert.equal(result.ok, true)
     assert.equal(result.data.value, 7)
-    assert.equal(result.generation.model.modelId, 'exact')
+    assert.equal(result.model.modelId, 'exact')
     assert.equal(calls, 1)
 })
 
-test('fatal provider circuits are instance-owned', async () => {
+test('fatal provider circuits are instance-owned and block future requests', async () => {
     const target = {providerId: 'mock', modelId: 'model'}
     const circuit = new ProviderCircuit()
     let calls = 0
@@ -59,10 +57,10 @@ test('fatal provider circuits are instance-owned', async () => {
     const blocked = await circuit.execute(target, fail)
 
     assert.equal(calls, 1)
-    assert.match(blocked.failure.message, /circuit open/)
+    assert.match(blocked.failure.message, /circuit open/i)
 })
 
-test('usage cost requires caller-supplied pricing', () => {
+test('usage cost calculates correctly with pricing rates', () => {
     const usage = {
         promptTokens: 1_000_000,
         completionTokens: 500_000,

@@ -1,148 +1,129 @@
-import type {
-  ModelCapabilities,
-  ModelInfo,
-  ProviderConfig,
-  ProviderState,
-  TaskType
-} from './types.mts';
+import type {ModelTarget} from './types.mts'
 
-export interface RouterOptions {
-  preferLocal?: boolean;
-  allowWeak?: boolean;
+export interface TaskRouteMap {
+    [task: string]: string | ModelTarget
 }
 
-export interface ScoringHeuristics {
-  [capability: string]: {
-    keywords: string[];
-  };
+export type CustomRouterFn = (task: string, availableProviders: string[]) => ModelTarget | string | undefined
+
+export interface ModelRouterOptions {
+    routes?: TaskRouteMap | undefined
+    router?: CustomRouterFn | undefined
+    preferLocal?: boolean | undefined
+    defaultModel?: string | ModelTarget | undefined
+}
+
+export const DEFAULT_TASK_ROUTES: TaskRouteMap = {
+    'code': 'openai/gpt-4o',
+    'fast': 'google/gemini-2.0-flash',
+    'reasoning': 'openai/o3-mini',
+    'creative': 'anthropic/claude-3-7-sonnet',
+    'summarization': 'google/gemini-2.0-flash',
+    'local': 'ollama/llama3.2',
+    'default': 'google/gemini-2.0-flash',
 }
 
 export class ModelRouter {
-  constructor(private providerState: ProviderState) {}
+    private readonly routes: TaskRouteMap
+    private readonly customRouter: CustomRouterFn | undefined
+    private readonly defaultModel: ModelTarget
+    private readonly preferLocal: boolean
 
-  route(taskType: TaskType, options: RouterOptions = {}): ModelInfo | null {
-    const providers = Object.values(this.providerState.providers);
-    const models = providers.flatMap((provider) =>
-      provider.available && provider.models
-        ? provider.models.map((model) => ({ ...model, providerId: model.providerId ?? provider.id }))
-        : []
-    );
-    return ModelRouter.routeCandidates(
-      ModelRouter.scoreModels(providers, taskType, models, this.providerState.knowledge?.heuristics ?? {}),
-      options
-    );
-  }
-
-  getProviderConfig(providerId: string): ProviderConfig | undefined {
-    return this.providerState.providers[providerId];
-  }
-
-  static scoreModels(
-    _providers: ProviderConfig[],
-    taskType: TaskType,
-    models: ModelInfo[],
-    heuristics: ScoringHeuristics = {}
-  ): ModelInfo[] {
-    const weights = taskType.weights && Object.keys(taskType.weights).length
-      ? taskType.weights
-      : this.getTaskWeights(taskType.id);
-
-    return models
-      .map((model) => {
-        const capabilities = model.capabilities ?? RouterHeuristics.inferCapabilities(model.id, model.sizeB ?? null, model.quality ?? 'medium', heuristics);
-        const capabilityScore = scoreCapabilities(capabilities, weights);
-        const qualityBonus = { low: 6, medium: 12, high: 18 }[model.quality ?? 'medium'];
-        const fitScore = Math.max(0, Math.min(100, Math.round(capabilityScore + qualityBonus)));
-        return {
-          ...model,
-          fitScore,
-          fitReasons: [`capability fit ${capabilityScore.toFixed(1)}/100`, `quality ${model.quality ?? 'medium'}`]
-        };
-      })
-      .sort((left, right) => (right.fitScore ?? 0) - (left.fitScore ?? 0));
-  }
-
-  static route(candidates: ModelInfo[], options: RouterOptions = {}): ModelInfo | null {
-    return this.routeCandidates(candidates, options);
-  }
-
-  private static routeCandidates(candidates: ModelInfo[], options: RouterOptions): ModelInfo | null {
-    const available = candidates.filter((candidate) => (candidate.fitScore ?? 0) > 0);
-    if (!available.length) return null;
-
-    if (options.preferLocal) {
-      const local = available.filter((candidate) => candidate.local || candidate.providerId === 'ollama');
-      if (local.length) return local[0] ?? null;
-      if (!options.allowWeak) return null;
+    constructor(options: ModelRouterOptions = {}) {
+        this.routes = {...DEFAULT_TASK_ROUTES, ...options.routes}
+        this.customRouter = options.router
+        this.preferLocal = Boolean(options.preferLocal)
+        this.defaultModel = parseModelTarget(options.defaultModel ?? 'google/gemini-2.0-flash')
     }
 
-    return available[0] ?? null;
-  }
+    /**
+     * Resolves a task or model name to a concrete ModelTarget given available providers.
+     */
+    resolve(
+        targetOrTask?: string | ModelTarget | undefined,
+        availableProviders: string[] = ['google', 'openai', 'anthropic', 'ollama'],
+    ): ModelTarget {
+        if (typeof targetOrTask === 'object' && targetOrTask.providerId && targetOrTask.modelId)
+            return targetOrTask
 
-  private static getTaskWeights(taskClass: string): Partial<ModelCapabilities> {
-    if (taskClass === 'code-generation') return { logic: 0.45, strategy: 0.3, prose: 0.15, data: 0.1 };
-    if (taskClass === 'summarization') return { data: 0.45, prose: 0.35, strategy: 0.15, logic: 0.05 };
-    if (taskClass === 'architecture') return { strategy: 0.45, logic: 0.25, prose: 0.2, data: 0.1 };
-    return { strategy: 0.3, logic: 0.3, prose: 0.2, data: 0.2 };
-  }
+        const targetStr = targetOrTask ? String(targetOrTask).trim() : ''
+
+        // 1. Direct provider/model string (e.g. 'openai/gpt-4o')
+        if (targetStr.includes('/'))
+            return parseModelTarget(targetStr)
+
+        // 2. Custom router hook
+        if (targetStr && this.customRouter) {
+            const custom = this.customRouter(targetStr, availableProviders)
+            if (custom)
+                return typeof custom === 'string' ? parseModelTarget(custom) : custom
+        }
+
+        // 3. Local preference
+        if (this.preferLocal && availableProviders.includes('ollama'))
+            return {providerId: 'ollama', modelId: 'llama3.2'}
+
+        // 4. Mapped task
+        if (targetStr && this.routes[targetStr]) {
+            const mapped = this.routes[targetStr]
+            const parsed = typeof mapped === 'string' ? parseModelTarget(mapped) : mapped
+            if (availableProviders.length === 0 || availableProviders.includes(parsed.providerId))
+                return parsed
+        }
+
+        return this.resolveDefault(availableProviders)
+    }
+
+    private resolveDefault(availableProviders: string[]): ModelTarget {
+        if (this.preferLocal && availableProviders.includes('ollama'))
+            return {providerId: 'ollama', modelId: 'llama3.2'}
+
+        // Check routes['default']
+        const defaultRoute = this.routes.default
+        if (defaultRoute) {
+            const parsed = typeof defaultRoute === 'string' ? parseModelTarget(defaultRoute) : defaultRoute
+            if (availableProviders.length === 0 || availableProviders.includes(parsed.providerId))
+                return parsed
+        }
+
+        // If the configured default provider is available, use it
+        if (availableProviders.includes(this.defaultModel.providerId))
+            return this.defaultModel
+
+        // Fallback to first available provider
+        const priorities: Array<{providerId: string; modelId: string}> = [
+            {providerId: 'google', modelId: 'gemini-2.0-flash'},
+            {providerId: 'openai', modelId: 'gpt-4o'},
+            {providerId: 'anthropic', modelId: 'claude-3-7-sonnet'},
+            {providerId: 'ollama', modelId: 'llama3.2'},
+        ]
+
+        for (const candidate of priorities) {
+            if (availableProviders.includes(candidate.providerId))
+                return candidate
+        }
+
+        // If any provider is available at all, return the first one
+        if (availableProviders.length > 0) {
+            const first = availableProviders[0]!
+            return {providerId: first, modelId: 'default'}
+        }
+
+        return this.defaultModel
+    }
 }
 
-export class RouterHeuristics {
-  static inferCapabilities(
-    modelId: string,
-    _sizeB: number | null,
-    quality: 'low' | 'medium' | 'high',
-    heuristics: ScoringHeuristics = {}
-  ): ModelCapabilities {
-    const lower = modelId.toLowerCase();
-    const base = quality === 'high' ? 0.75 : quality === 'medium' ? 0.55 : 0.35;
-    const capabilities: ModelCapabilities = {
-      logic: base,
-      strategy: base,
-      prose: base,
-      visual: base,
-      creative: base,
-      data: base
-    };
-    const keywordMap: Record<keyof ModelCapabilities, string[]> = {
-      logic: ['coder', 'code', 'math'],
-      strategy: ['reason', 'reasoning', 'plan', 'planner', 'agent', 'analysis'],
-      prose: ['llama', 'gemma', 'chat', 'assistant'],
-      creative: ['hermes', 'stheno'],
-      visual: ['vision', 'moondream'],
-      data: ['extract', 'summary', 'json']
-    };
+export function parseModelTarget(input: string | ModelTarget): ModelTarget {
+    if (typeof input === 'object' && input.providerId && input.modelId)
+        return input
 
-    for (const [capability, defaults] of Object.entries(keywordMap) as Array<[keyof ModelCapabilities, string[]]>) {
-      const keywords = heuristics[capability]?.keywords ?? defaults;
-      if (keywords.some((keyword) => lower.includes(keyword))) {
-        capabilities[capability] = Math.min(1, capabilities[capability] + 0.2);
-      }
-    }
+    const str = String(input).trim()
+    const slashIdx = str.indexOf('/')
+    if (slashIdx === -1)
+        return {providerId: 'unknown', modelId: str}
 
-    return capabilities;
-  }
-
-  static scoreModel(model: ModelInfo, task: TaskType): { fitScore: number; reasons: string[] } {
-    const scored = ModelRouter.scoreModels([], task, [model])[0];
-    if (!scored) return { fitScore: 0, reasons: [] };
     return {
-      fitScore: scored.fitScore ?? 0,
-      reasons: scored.fitReasons ?? []
-    };
-  }
-}
-
-function scoreCapabilities(
-  capabilities: Partial<ModelCapabilities>,
-  weights: Partial<ModelCapabilities>
-): number {
-  let score = 0;
-  let totalWeight = 0;
-  for (const [key, weight] of Object.entries(weights)) {
-    const weighted = Number(weight ?? 0);
-    score += Number(capabilities[key as keyof ModelCapabilities] ?? 0) * weighted;
-    totalWeight += weighted;
-  }
-  return totalWeight ? (score / totalWeight) * 100 : 0;
+        providerId: str.slice(0, slashIdx).trim(),
+        modelId: str.slice(slashIdx + 1).trim(),
+    }
 }

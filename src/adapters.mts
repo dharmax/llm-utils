@@ -3,52 +3,45 @@ import type {
     GenerationResult,
     LlmFailure,
     ProviderAdapter,
-    ProviderId,
     ResponseFormat,
-    StructuredOutputTransport,
+    Usage,
 } from './types.mts'
-
-type JsonRecord = Record<string, unknown>
 
 export class OpenAIAdapter implements ProviderAdapter {
     readonly id = 'openai'
 
     async generate(options: GenerateOptions): Promise<GenerationResult> {
-        const {modelId, prompt, system, config, format, signal} = options
+        const {modelId, prompt, system, config, format, signal, temperature} = options
         if (!config.apiKey)
-            return adapterFailure(this.id, modelId, {
-                kind: 'configuration',
-                message: 'OpenAI API key missing.',
-                retryable: false,
-                fatal: true,
-            })
+            return missingApiKey(this.id, modelId)
 
-        const responseFormat = normalizeResponseFormat(format)
-        const result = await requestJson({
+        const responseFormat = toOpenAiFormat(format)
+        const messages = [
+            ...(system ? [{role: 'system', content: system}] : []),
+            {role: 'user', content: prompt},
+        ]
+
+        return postJson({
             providerId: this.id,
             modelId,
             url: `${config.baseUrl ?? 'https://api.openai.com/v1'}/chat/completions`,
             headers: {Authorization: `Bearer ${config.apiKey}`},
             body: {
                 model: modelId,
-                messages: [
-                    ...(system ? [{role: 'system', content: system}] : []),
-                    {role: 'user', content: prompt},
-                ],
-                temperature: options.temperature ?? 0.1,
-                response_format: openAiResponseFormat(responseFormat),
+                messages,
+                temperature: temperature ?? 0.1,
+                ...(responseFormat ? {response_format: responseFormat} : {}),
             },
             signal,
-            read: data => ({
-                text: stringAt(data, 'choices', 0, 'message', 'content'),
-                usage: usage(
-                    numberAt(data, 'usage', 'prompt_tokens'),
-                    numberAt(data, 'usage', 'completion_tokens'),
-                    numberAt(data, 'usage', 'total_tokens'),
-                ),
-            }),
+            extract: data => {
+                const choice = (data as {choices?: Array<{message?: {content?: string}}>})?.choices?.[0]
+                const usageData = (data as {usage?: {prompt_tokens?: number; completion_tokens?: number; total_tokens?: number}})?.usage
+                return {
+                    text: choice?.message?.content ?? '',
+                    usage: usageData ? toUsage(usageData.prompt_tokens, usageData.completion_tokens, usageData.total_tokens) : undefined,
+                }
+            },
         })
-        return withStructuredOutput(result, responseFormat, true)
     }
 }
 
@@ -56,17 +49,11 @@ export class AnthropicAdapter implements ProviderAdapter {
     readonly id = 'anthropic'
 
     async generate(options: GenerateOptions): Promise<GenerationResult> {
-        const {modelId, prompt, system, config, signal} = options
+        const {modelId, prompt, system, config, signal, temperature} = options
         if (!config.apiKey)
-            return adapterFailure(this.id, modelId, {
-                kind: 'configuration',
-                message: 'Anthropic API key missing.',
-                retryable: false,
-                fatal: true,
-            })
+            return missingApiKey(this.id, modelId)
 
-        const responseFormat = normalizeResponseFormat(options.format)
-        const result = await requestJson({
+        return postJson({
             providerId: this.id,
             modelId,
             url: `${config.baseUrl ?? 'https://api.anthropic.com/v1'}/messages`,
@@ -79,27 +66,24 @@ export class AnthropicAdapter implements ProviderAdapter {
                 messages: [{role: 'user', content: prompt}],
                 system: system || undefined,
                 max_tokens: 4096,
-                temperature: options.temperature ?? 0.1,
+                temperature: temperature ?? 0.1,
             },
             signal,
-            read: data => {
-                const content = arrayAt(data, 'content')
-                    .filter(part => recordAt(part)?.type === 'text')
-                    .map(part => String(recordAt(part)?.text ?? ''))
+            extract: data => {
+                const content = (data as {content?: Array<{type: string; text?: string}>})?.content ?? []
+                const text = content
+                    .filter(c => c.type === 'text')
+                    .map(c => c.text ?? '')
                     .join('\n')
-                const promptTokens = numberAt(data, 'usage', 'input_tokens')
-                const completionTokens = numberAt(data, 'usage', 'output_tokens')
+                const usageData = (data as {usage?: {input_tokens?: number; output_tokens?: number}})?.usage
+                const promptTokens = usageData?.input_tokens ?? 0
+                const completionTokens = usageData?.output_tokens ?? 0
                 return {
-                    text: content,
-                    usage: usage(
-                        promptTokens,
-                        completionTokens,
-                        promptTokens + completionTokens,
-                    ),
+                    text,
+                    usage: usageData ? toUsage(promptTokens, completionTokens, promptTokens + completionTokens) : undefined,
                 }
             },
         })
-        return withStructuredOutput(result, responseFormat, false)
     }
 }
 
@@ -107,44 +91,37 @@ export class GoogleAdapter implements ProviderAdapter {
     readonly id = 'google'
 
     async generate(options: GenerateOptions): Promise<GenerationResult> {
-        const {modelId, prompt, system, config, format, signal} = options
+        const {modelId, prompt, system, config, format, signal, temperature} = options
         if (!config.apiKey)
-            return adapterFailure(this.id, modelId, {
-                kind: 'configuration',
-                message: 'Google API key missing.',
-                retryable: false,
-                fatal: true,
-            })
+            return missingApiKey(this.id, modelId)
 
-        const responseFormat = normalizeResponseFormat(format)
-        const result = await requestJson({
+        const isJson = isJsonFormat(format)
+        const schema = format && typeof format === 'object' && format.type === 'json_schema' ? format.schema : undefined
+
+        return postJson({
             providerId: this.id,
             modelId,
             url: `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${config.apiKey}`,
             body: {
                 contents: [{role: 'user', parts: [{text: prompt}]}],
                 generationConfig: {
-                    temperature: options.temperature ?? 0.1,
-                    responseMimeType: responseFormat.type === 'text'
-                        ? 'text/plain'
-                        : 'application/json',
-                    ...(responseFormat.type === 'json_schema'
-                        ? {responseJsonSchema: responseFormat.schema}
-                        : {}),
+                    temperature: temperature ?? 0.1,
+                    ...(isJson ? {responseMimeType: 'application/json'} : {}),
+                    ...(schema ? {responseJsonSchema: schema} : {}),
                 },
                 ...(system ? {systemInstruction: {parts: [{text: system}]}} : {}),
             },
             signal,
-            read: data => ({
-                text: stringAt(data, 'candidates', 0, 'content', 'parts', 0, 'text'),
-                usage: usage(
-                    numberAt(data, 'usageMetadata', 'promptTokenCount'),
-                    numberAt(data, 'usageMetadata', 'candidatesTokenCount'),
-                    numberAt(data, 'usageMetadata', 'totalTokenCount'),
-                ),
-            }),
+            extract: data => {
+                const cand = (data as {candidates?: Array<{content?: {parts?: Array<{text?: string}>}}>})?.candidates?.[0]
+                const text = cand?.content?.parts?.[0]?.text ?? ''
+                const meta = (data as {usageMetadata?: {promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number}})?.usageMetadata
+                return {
+                    text,
+                    usage: meta ? toUsage(meta.promptTokenCount, meta.candidatesTokenCount, meta.totalTokenCount) : undefined,
+                }
+            },
         })
-        return withStructuredOutput(result, responseFormat, true)
     }
 }
 
@@ -152,12 +129,14 @@ export class OllamaProvider implements ProviderAdapter {
     readonly id = 'ollama'
 
     async generate(options: GenerateOptions): Promise<GenerationResult> {
-        const {modelId, prompt, system, config, format, signal} = options
-        const host = config.host ?? 'localhost'
-        const baseUrl = host.startsWith('http') ? host : `http://${host}:11434`
+        const {modelId, prompt, system, config, format, signal, temperature} = options
+        const host = config.host ?? 'http://127.0.0.1:11434'
+        const baseUrl = host.startsWith('http') ? host : `http://${host}`
 
-        const responseFormat = normalizeResponseFormat(format)
-        const result = await requestJson({
+        const isJson = isJsonFormat(format)
+        const schema = format && typeof format === 'object' && format.type === 'json_schema' ? format.schema : undefined
+
+        return postJson({
             providerId: this.id,
             modelId,
             url: `${baseUrl}/api/generate`,
@@ -166,122 +145,101 @@ export class OllamaProvider implements ProviderAdapter {
                 prompt,
                 system,
                 stream: false,
-                format: responseFormat.type === 'json_schema'
-                    ? responseFormat.schema
-                    : responseFormat.type === 'json'
-                        ? 'json'
-                        : undefined,
-                options: {temperature: options.temperature ?? 0.1},
+                ...(schema ? {format: schema} : isJson ? {format: 'json'} : {}),
+                options: {temperature: temperature ?? 0.1},
             },
             signal,
-            read: data => {
-                const promptTokens = numberAt(data, 'prompt_eval_count')
-                const completionTokens = numberAt(data, 'eval_count')
+            extract: data => {
+                const text = (data as {response?: string})?.response ?? ''
+                const promptTokens = (data as {prompt_eval_count?: number})?.prompt_eval_count ?? 0
+                const completionTokens = (data as {eval_count?: number})?.eval_count ?? 0
                 return {
-                    text: stringAt(data, 'response'),
-                    usage: usage(
-                        promptTokens,
-                        completionTokens,
-                        promptTokens + completionTokens,
-                    ),
+                    text,
+                    usage: toUsage(promptTokens, completionTokens, promptTokens + completionTokens),
                 }
             },
         })
-        return withStructuredOutput(result, responseFormat, true)
     }
 }
 
-type RequestOptions = {
-    providerId: ProviderId
+interface PostJsonOptions {
+    providerId: string
     modelId: string
     url: string
-    headers?: Record<string, string>
-    body: JsonRecord
+    headers?: Record<string, string> | undefined
+    body: Record<string, unknown>
     signal?: AbortSignal | null | undefined
-    read(data: JsonRecord): Pick<GenerationResult, 'text' | 'usage'>
+    extract: (data: unknown) => {text: string; usage?: Usage | undefined}
 }
 
-async function requestJson(options: RequestOptions): Promise<GenerationResult> {
+async function postJson(opts: PostJsonOptions): Promise<GenerationResult> {
+    const {providerId, modelId, url, headers, body, signal, extract} = opts
     try {
-        const response = await fetch(options.url, {
+        const response = await fetch(url, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                ...options.headers,
+                ...headers,
             },
-            body: JSON.stringify(options.body),
-            ...(options.signal === undefined ? {} : {signal: options.signal}),
+            body: JSON.stringify(body),
+            ...(signal ? {signal} : {}),
         })
-        const raw = await readJsonResponse(response)
 
-        if (!response.ok)
-            return adapterFailure(
-                options.providerId,
-                options.modelId,
-                providerFailure(response.status, response.statusText, raw),
-            )
-
-        const data = recordAt(raw)
-        if (!data)
-            return adapterFailure(options.providerId, options.modelId, {
-                kind: 'invalid_response',
-                message: 'Provider returned a non-object JSON response.',
-                retryable: false,
-                fatal: false,
-                raw,
-            })
-
-        const result = options.read(data)
-        return {
-            ...result,
-            ok: true,
-            model: {
-                providerId: options.providerId,
-                modelId: options.modelId,
-            },
-            raw,
+        const rawText = await response.text()
+        let parsed: unknown
+        try {
+            parsed = rawText ? JSON.parse(rawText) : {}
+        } catch {
+            parsed = rawText
         }
-    } catch (error) {
-        return adapterFailure(
-            options.providerId,
-            options.modelId,
-            thrownFailure(error),
-        )
+
+        if (!response.ok) {
+            return {
+                ok: false,
+                text: '',
+                model: {providerId, modelId},
+                failure: parseHttpFailure(response.status, response.statusText, parsed),
+                raw: parsed,
+            }
+        }
+
+        const extracted = extract(parsed)
+        return {
+            ok: true,
+            text: extracted.text,
+            usage: extracted.usage,
+            model: {providerId, modelId},
+            raw: parsed,
+        }
+    } catch (err) {
+        return {
+            ok: false,
+            text: '',
+            model: {providerId, modelId},
+            failure: parseThrownError(err),
+            raw: err,
+        }
     }
 }
 
-async function readJsonResponse(response: Response): Promise<unknown> {
-    const text = await response.text()
-    if (!text)
-        return undefined
-    try {
-        return JSON.parse(text)
-    } catch {
-        return text
-    }
-}
-
-function providerFailure(status: number, statusText: string, raw: unknown): LlmFailure {
-    const record = recordAt(raw)
-    const error = recordAt(record?.error)
-    const code = stringValue(error?.code ?? record?.code)
-    const message = stringValue(error?.message ?? record?.message ?? record?.error)
-        || statusText
-        || `Provider request failed with HTTP ${status}.`
+function parseHttpFailure(status: number, statusText: string, raw: unknown): LlmFailure {
+    const rec = typeof raw === 'object' && raw !== null ? raw as Record<string, unknown> : {}
+    const errRec = typeof rec.error === 'object' && rec.error !== null ? rec.error as Record<string, unknown> : {}
+    const code = String(errRec.code ?? rec.code ?? '')
+    const message = String(errRec.message ?? rec.message ?? rec.error ?? statusText ?? `HTTP ${status}`)
 
     if (status === 401 || status === 403)
         return {kind: 'authentication', message, status, code, retryable: false, fatal: true, raw}
 
     if (status === 429) {
-        const quota = code === 'insufficient_quota'
-            || /(?:quota|billing|credit)/i.test(message)
+        const isQuota = code === 'insufficient_quota' || /(?:quota|billing|credit)/i.test(message)
         return {
-            kind: quota ? 'quota' : 'rate_limit',
+            kind: isQuota ? 'quota' : 'rate_limit',
             message,
             status,
             code,
-            retryable: !quota,
-            fatal: quota,
+            retryable: !isQuota,
+            fatal: isQuota,
             raw,
         }
     }
@@ -300,131 +258,60 @@ function providerFailure(status: number, statusText: string, raw: unknown): LlmF
     }
 }
 
-function thrownFailure(error: unknown): LlmFailure {
-    const message = error instanceof Error ? error.message : String(error)
-    if (error instanceof DOMException && error.name === 'AbortError')
-        return {kind: 'timeout', message, retryable: true, fatal: false, raw: error}
-    return {kind: 'network', message, retryable: true, fatal: false, raw: error}
+function parseThrownError(err: unknown): LlmFailure {
+    const message = err instanceof Error ? err.message : String(err)
+    if (err instanceof DOMException && err.name === 'AbortError')
+        return {kind: 'timeout', message, retryable: true, fatal: false, raw: err}
+    return {kind: 'network', message, retryable: true, fatal: false, raw: err}
 }
 
-function adapterFailure(
-    providerId: ProviderId,
-    modelId: string,
-    failure: LlmFailure,
-): GenerationResult {
+function missingApiKey(providerId: string, modelId: string): GenerationResult {
     return {
-        text: '',
         ok: false,
-        failure,
-        error: failure.message,
-        err: failure.message,
+        text: '',
         model: {providerId, modelId},
+        failure: {
+            kind: 'configuration',
+            message: `Missing API key for ${providerId}`,
+            retryable: false,
+            fatal: true,
+        },
     }
 }
 
-function usage(
-    promptTokens: number,
-    completionTokens: number,
-    totalTokens: number,
-): NonNullable<GenerationResult['usage']> {
+function toUsage(prompt = 0, completion = 0, total = 0): Usage {
     return {
-        promptTokens,
-        completionTokens,
-        totalTokens,
+        promptTokens: prompt,
+        completionTokens: completion,
+        totalTokens: total || prompt + completion,
         available: true,
     }
 }
 
-function recordAt(value: unknown): JsonRecord | undefined {
-    return typeof value === 'object' && value !== null && !Array.isArray(value)
-        ? value as JsonRecord
-        : undefined
-}
-
-function arrayAt(value: unknown, ...path: Array<string | number>): unknown[] {
-    const found = valueAt(value, path)
-    return Array.isArray(found) ? found : []
-}
-
-function stringAt(value: unknown, ...path: Array<string | number>): string {
-    return stringValue(valueAt(value, path))
-}
-
-function numberAt(value: unknown, ...path: Array<string | number>): number {
-    const found = valueAt(value, path)
-    return typeof found === 'number' && Number.isFinite(found) ? found : 0
-}
-
-function valueAt(value: unknown, path: Array<string | number>): unknown {
-    let current = value
-    for (const key of path) {
-        if (typeof key === 'number') {
-            if (!Array.isArray(current))
-                return undefined
-            current = current[key]
-        } else {
-            const record = recordAt(current)
-            if (!record)
-                return undefined
-            current = record[key]
-        }
-    }
-    return current
-}
-
-function stringValue(value: unknown): string {
-    return typeof value === 'string' ? value : ''
-}
-
-type NormalizedResponseFormat =
-    | {type: 'text'}
-    | {type: 'json'}
-    | {
-        type: 'json_schema'
-        name: string
-        schema: Record<string, unknown>
-        strict?: boolean
-    }
-
-function normalizeResponseFormat(format: ResponseFormat | undefined): NormalizedResponseFormat {
-    if (!format || format === 'text')
-        return {type: 'text'}
+function isJsonFormat(format?: ResponseFormat): boolean {
+    if (!format)
+        return false
     if (format === 'json')
-        return {type: 'json'}
-    return format
+        return true
+    if (typeof format === 'object' && (format.type === 'json' || format.type === 'json_schema'))
+        return true
+    return false
 }
 
-function openAiResponseFormat(
-    format: NormalizedResponseFormat,
-): JsonRecord | undefined {
-    if (format.type === 'json')
+function toOpenAiFormat(format?: ResponseFormat): Record<string, unknown> | undefined {
+    if (!format || format === 'text' || (typeof format === 'object' && format.type === 'text'))
+        return undefined
+    if (format === 'json' || (typeof format === 'object' && format.type === 'json'))
         return {type: 'json_object'}
-    if (format.type === 'json_schema') {
+    if (typeof format === 'object' && format.type === 'json_schema') {
         return {
             type: 'json_schema',
             json_schema: {
-                name: format.name,
+                name: format.name ?? 'structured_response',
                 schema: format.schema,
-                ...(format.strict === undefined ? {} : {strict: format.strict}),
+                ...(format.strict !== undefined ? {strict: format.strict} : {}),
             },
         }
     }
     return undefined
-}
-
-function withStructuredOutput(
-    result: GenerationResult,
-    format: NormalizedResponseFormat,
-    supportsJsonSchema: boolean,
-): GenerationResult {
-    if (format.type === 'text')
-        return result
-    const structuredOutput: StructuredOutputTransport = {
-        requested: format.type,
-        nativeJsonSchemaUsed: format.type === 'json_schema' && supportsJsonSchema,
-        ...(format.type === 'json_schema' && !supportsJsonSchema
-            ? {fallbackReason: 'provider_unsupported'}
-            : {}),
-    }
-    return {...result, structuredOutput}
 }

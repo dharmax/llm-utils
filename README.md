@@ -1,175 +1,207 @@
 # @dharmax/llm-utils
 
-Small TypeScript primitives for LLM-powered tools:
+Ultra-lean, strictly typed TypeScript primitives for LLM execution, automatic structured JSON, dynamic routing, prompt templates, context injection, and metrics.
 
-- `Asker` executes direct or template-backed requests.
-- `CompletionEngine` owns and dispatches provider adapters per client instance.
-- Provider failures preserve kind, HTTP status, provider code, retryability, and fatality.
-- `requestStructuredJson` executes one substantive request, then performs local
-  extraction/repair/validation and optional bounded corrective requests.
-- `ModelRouter` scores and selects models.
-- `PromptEngine` loads `.system` and `.prompt` template parts.
-- `ContextManager` and `PromptContextManager` support lightweight prompt injection.
-- `LLMSession` keeps short in-memory history and metrics.
-- `LlmMetrics` aggregates usage, latency, failures, and cost.
-- `ProviderDiscovery` normalizes configured providers and probes Ollama.
+```
+Zero-Config Setup  →  1-Line Asks  →  Typed JSON (Zod)  →  Dynamic Routing  →  100% Reliable
+```
 
-This is not an agent runtime, workflow database, prompt repository, or provider SDK installer.
+---
 
-## Install
+## Features
+
+* **Zero-Ceremony Setup**: Automatically reads `OPENAI_API_KEY`, `GEMINI_API_KEY` / `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, and `OLLAMA_HOST` from `process.env`.
+* **Automatic Typed JSON (`asker.json()`)**: Injects provider-native schema, strips markdown fences, repairs malformed JSON with `jsonrepair`, and returns inferred `data: z.infer<typeof schema>`.
+* **Dynamic Multi-Tier Routing**: Route by task alias (`code`, `fast`, `reasoning`, `local`), direct provider target (`'openai/gpt-4o'`), or custom routing hooks with reliable offline fallback.
+* **Fatal-Provider Circuit Breaker**: Prevents redundant calls after fatal failures (e.g., quota or auth exhaustion).
+* **Plug-and-Play Extensibility**: Standard interfaces for [`@dharmax/context-manager`](../context-manager), [`@dharmax/pubsub`](../pubsub), and custom storage sinks.
+* **Instance-Owned State**: No hidden static singletons; test runs and separate clients never leak state.
+
+---
+
+## Installation
 
 ```sh
-npm install @dharmax/llm-utils
+npm install @dharmax/llm-utils zod
 ```
 
-## Direct Request
-
-```ts
-import {Asker, CompletionEngine} from '@dharmax/llm-utils'
-
-const completion = new CompletionEngine([]).registerAdapter({
-    id: 'mock',
-    async generate(options) {
-        return {
-            text: `Echo: ${options.prompt}`,
-            ok: true,
-            model: {providerId: 'mock', modelId: options.modelId},
-        }
-    },
-})
-
-const asker = new Asker({
-    providerState: {
-        providers: {
-            mock: {
-                id: 'mock',
-                available: true,
-                models: [{id: 'mock-1', providerId: 'mock', quality: 'medium'}],
-            },
-        },
-    },
-    completion,
-})
-
-const result = await asker.ask('Summarize this file', 'summarization')
-console.log(result.text)
-```
-
-Use `asker.askExact(prompt, {providerId, modelId})` or
-`asker.promptExact(templateName, data, {providerId, modelId})` when an
-application—not the router—owns model selection.
-
-`CompletionEngine` has no static registry. Separate instances cannot leak custom
-adapters or test state into each other.
-
-The package ships its TypeScript source as its type entrypoint and Bun runtime
-entrypoint; Node uses the built ESM bundle. Exact Git dependencies therefore work
-without lifecycle scripts or committed build artifacts.
-
-## Structured JSON
-
-```ts
-import {z} from '@dharmax/llm-utils'
-
-const schema = z.object({summary: z.string()})
-const result = await asker.askJson(
-    'Summarize the book as JSON.',
-    'book-analysis',
-    {
-        schema,
-    },
-)
-if (!result.ok)
-    throw new Error(result.message)
-console.log(result.data)
-```
-
-`asker.promptJson(templateName, data, {schema})` provides the same
-behavior for prompt templates. Both methods infer `result.data` from the Zod
-schema, select the appropriate JSON response format, repair common malformed
-JSON locally, and validate before returning.
-
-The package owns Zod 4 and re-exports `z`. It converts safely representable Zod
-schemas to provider JSON Schema, accepts an explicit provider-schema override,
-and falls back to generic JSON mode while retaining full local Zod validation
-for transforms, preprocessors, custom refinements, and other semantic checks.
-
-The parser accepts object or array roots from direct JSON, fenced JSON, or
-surrounding prose. Candidate extraction is balanced and quote-aware; it rejects
-scalars and arbitrary prose. When a schema is supplied, every deterministic
-candidate is considered until one validates.
-
-See [docs/structured-output.md](docs/structured-output.md) for provider mapping,
-fallback, diagnostics, checkpoint validation, and correction semantics.
-
-## Fatal-provider circuit
-
-`ProviderCircuit` wraps requests and opens only when a typed provider failure is
-marked `fatal`. Later calls return a typed failure without contacting that
-provider. Create one circuit per client or application run; no state is global.
-
-## Templates And Context
-
-`PromptEngine` loads two optional parts per template name:
-
-- `<name>.system`
-- `<name>.prompt`
-
-Each part can start with JSON frontmatter:
-
-```text
---- json
-{"taskType":"code-generation","format":"json"}
 ---
-System or prompt body with {{ variables }}.
-```
 
-For context injection, pass either the built-in `ContextManager` or any object implementing:
+## Quickstart
+
+### 1. Direct Text Generation
 
 ```ts
-interface PromptContextManager {
-  resolve(request: ContextRequest): Promise<ContextResult>;
+import { Asker } from '@dharmax/llm-utils'
+
+const asker = new Asker()
+
+const result = await asker.ask('Explain quantum computing in one sentence.')
+if (result.ok) {
+    console.log(result.text)
+    console.log(result.model) // { providerId: 'google', modelId: 'gemini-2.0-flash' }
 }
 ```
 
-## Metrics
+---
+
+### 2. Automatic Typed Structured JSON
 
 ```ts
-import { LlmMetrics, InMemoryMetricsStore } from '@dharmax/llm-utils';
+import { Asker, z } from '@dharmax/llm-utils'
 
-const metrics = new LlmMetrics(new InMemoryMetricsStore());
-metrics.record({
-  timestamp: new Date().toISOString(),
-  providerId: 'openai',
-  modelId: 'gpt-4o-mini',
-  promptTokens: 10,
-  completionTokens: 20,
-  latencyMs: 500,
-  success: true
-});
+const asker = new Asker()
 
-console.log(metrics.totals());
+const bookSchema = z.object({
+    title: z.string(),
+    author: z.string(),
+    summary: z.string(),
+    tags: z.array(z.string()),
+})
+
+// Automatically inferred as { title: string; author: string; summary: string; tags: string[] }
+const result = await asker.json('Summarize Dune as JSON.', bookSchema)
+
+if (result.ok && result.data) {
+    console.log(result.data.title)
+    console.log(result.data.tags)
+}
 ```
 
-## Public API
+---
 
-The root export intentionally contains the package capabilities without exposing the old directory structure:
+### 3. Model Routing & Exact Overrides
 
-- request/session: `Asker`, `LLMSession`
-- completion/adapters: `CompletionEngine`, typed `LlmFailure`, `OpenAIAdapter`, `AnthropicAdapter`, `GoogleAdapter`, `OllamaProvider`
-- structured responses: `z`, `zodToJsonSchema`, `resolveStructuredOutput`,
-  `requestStructuredJson`, `parseStructuredJsonResult`,
-  `parseStructuredJson`, `validateStructuredValue`, `StructuredJsonError`
-- request lifecycle: `ProviderCircuit`
-- routing: `ModelRouter`, `RouterHeuristics`
-- prompts/context: `PromptEngine`, `ContextManager`, `ContextCompressor`
-- metrics: `LlmMetrics`, `MetricsEngine`, `InMemoryMetricsStore`
-- discovery/system: `ProviderDiscovery`, `SystemProbe`
-- public types from the same root entry
+Route by task alias or target specific providers/models directly:
 
-## Development
+```ts
+// 1. Route by task alias:
+await asker.ask('Write a fast HTTP server in Go', { task: 'code' })
+
+// 2. Exact provider/model override:
+await asker.ask('Hello from Claude', { model: 'anthropic/claude-3-7-sonnet' })
+
+// 3. Local Ollama execution:
+await asker.ask('Private summary', { model: 'ollama/llama3.2' })
+```
+
+#### Default Task Routes:
+* `code` &rarr; `openai/gpt-4o`
+* `fast` &rarr; `google/gemini-2.0-flash`
+* `reasoning` &rarr; `openai/o3-mini`
+* `creative` &rarr; `anthropic/claude-3-7-sonnet`
+* `local` &rarr; `ollama/llama3.2`
+
+You can customize task routes during instantiation:
+
+```ts
+const asker = new Asker({
+    routes: {
+        'code': 'anthropic/claude-3-7-sonnet',
+        'fast': 'google/gemini-2.0-flash',
+    },
+})
+```
+
+---
+
+### 4. Prompt Templates & Context Injection
+
+`PromptEngine` loads templates with optional JSON frontmatter and renders `{{ variables }}`:
+
+```text
+--- json
+{"taskType": "code", "system": "You are a principal engineer."}
+---
+Review this diff for {{ language }}:
+{{ context }}
+```
+
+Execute template with context:
+
+```ts
+const result = await asker.prompt('code-review', {
+    language: 'TypeScript',
+    inputText: 'function add(a, b) { return a + b }',
+}, {
+    // Plugs directly into @dharmax/context-manager or any custom resolver
+    context: async (req) => `Relevant guideline: Always type parameters.`,
+})
+```
+
+---
+
+### 5. Multi-Turn Session Memory
+
+```ts
+import { Asker, LLMSession } from '@dharmax/llm-utils'
+
+const asker = new Asker()
+const session = new LLMSession(asker)
+
+await session.prompt('assistant', { inputText: 'My name is Alice.' })
+const response = await session.prompt('assistant', { inputText: 'What is my name?' })
+
+console.log(response.text) // "Your name is Alice."
+```
+
+---
+
+### 6. Metrics & PubSub Event Broadcasting
+
+```ts
+import { LlmMetrics, createMetricsPubSub } from '@dharmax/llm-utils'
+
+const bus = createMetricsPubSub('My App Metrics')
+const metrics = new LlmMetrics(undefined, { bus })
+
+bus.on('metrics:recorded', (_event, metric) => {
+    console.log(`[Metric] ${metric.providerId}/${metric.modelId}: ${metric.latencyMs}ms, ${metric.totalTokens} tokens`)
+})
+
+metrics.record({
+    timestamp: new Date().toISOString(),
+    providerId: 'openai',
+    modelId: 'gpt-4o',
+    promptTokens: 50,
+    completionTokens: 25,
+    latencyMs: 320,
+    success: true,
+})
+
+console.log(metrics.totals())
+```
+
+---
+
+## Public Exports
+
+```ts
+// Core Client
+export { Asker } from '@dharmax/llm-utils'
+
+// Types & Schemas
+export { z } from '@dharmax/llm-utils'
+export type { GenerationResult, ModelTarget, AskOptions, ProviderConfig } from '@dharmax/llm-utils'
+
+// Utilities & Engines
+export { CompletionEngine, ModelRouter, PromptEngine, ProviderCircuit, LlmMetrics, LLMSession } from '@dharmax/llm-utils'
+export { parseStructuredJson, parseStructuredJsonResult, zodToJsonSchema } from '@dharmax/llm-utils'
+```
+
+---
+
+## Development & Testing
 
 ```sh
-npm run build
-npm test
+npm run build      # Bundles with esbuild and emits declaration files
+npm run typecheck  # Strict TypeScript check
+npm test           # Executes test suite (24 tests)
+npm run check      # Typecheck + tests
 ```
+
+---
+
+## License
+
+MIT © [dharmax](https://github.com/dharmax)
