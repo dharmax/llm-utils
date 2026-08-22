@@ -70,7 +70,7 @@ export class ModelRouter {
                 return parseModelTarget(targetStr)
             if (this.defaultModel.providerId === 'ollama')
                 return this.defaultModel
-            return {providerId: 'ollama', modelId: 'qwen2.5-coder:7b'}
+            return parseModelTarget(this.routes.local ?? 'ollama/llama3.2')
         }
 
         // 4. Mapped task (e.g. 'code', 'fast', 'local')
@@ -95,7 +95,7 @@ export class ModelRouter {
         if (useLocal && availableProviders.includes('ollama')) {
             if (this.defaultModel.providerId === 'ollama')
                 return this.defaultModel
-            return {providerId: 'ollama', modelId: 'qwen2.5-coder:7b'}
+            return parseModelTarget(this.routes.local ?? 'ollama/llama3.2')
         }
 
         // Check routes['default']
