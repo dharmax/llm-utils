@@ -1,6 +1,6 @@
 import {jsonrepair} from 'jsonrepair'
 import {z, type ZodError, type ZodIssue, type ZodType} from 'zod'
-import type {JsonSchema, ResponseFormat} from './types.mts'
+import type {JsonSchema, ResponseFormat} from './types.mjs'
 
 export type StructuredJsonFailure = 'parse_failed' | 'schema_invalid'
 

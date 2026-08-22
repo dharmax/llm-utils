@@ -1,26 +1,27 @@
 import type {ZodType} from 'zod'
-import {CompletionEngine} from './completion.mts'
-import {type ContextRequest, type ContextResolver, resolveContext} from './context.mts'
-import {PromptEngine} from './prompts.mts'
-import {ProviderCircuit} from './provider-circuit.mts'
-import {ModelRouter} from './routing.mts'
+import {CompletionEngine} from './completion.mjs'
+import {type ContextRequest, type ContextResolver, resolveContext} from './context.mjs'
+import {PromptEngine} from './prompts.mjs'
+import {ProviderCircuit} from './provider-circuit.mjs'
+import {ModelRouter} from './routing.mjs'
 import {
     parseStructuredJsonResult,
     resolveResponseFormat,
-} from './structured-json.mts'
+} from './structured-json.mjs'
 import type {
     AskOptions,
     GenerationResult,
     ModelTarget,
     ProviderConfig,
     ProviderId,
-} from './types.mts'
+} from './types.mjs'
 
 export interface AskerOptions {
     providers?: Record<string, ProviderConfig> | ProviderConfig[] | undefined
     providerState?: {providers: Record<string, ProviderConfig>} | undefined
     router?: ModelRouter | undefined
     routes?: Record<string, string | ModelTarget> | undefined
+    defaultModel?: string | ModelTarget | undefined
     preferLocal?: boolean | undefined
     completion?: CompletionEngine | undefined
     promptEngine?: PromptEngine | undefined
@@ -47,6 +48,7 @@ export class Asker {
         // Configure router
         this.router = options.router ?? new ModelRouter({
             routes: options.routes,
+            defaultModel: options.defaultModel,
             preferLocal: this.preferLocal,
         })
 

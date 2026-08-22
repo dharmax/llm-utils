@@ -1,4 +1,4 @@
-import type {ModelTarget, ProviderId} from './types.mts'
+import type {ModelTarget, ProviderId} from './types.mjs'
 
 export interface TaskRouteMap {
     [task: string]: string | ModelTarget
@@ -66,7 +66,11 @@ export class ModelRouter {
         if (useLocal && availableProviders.includes('ollama')) {
             if (targetStr && this.routes[targetStr] && String(this.routes[targetStr]).startsWith('ollama/'))
                 return parseModelTarget(this.routes[targetStr]!)
-            return {providerId: 'ollama', modelId: 'llama3.2'}
+            if (targetStr && (targetStr.startsWith('ollama/') || inferProviderFromModelName(targetStr) === 'ollama'))
+                return parseModelTarget(targetStr)
+            if (this.defaultModel.providerId === 'ollama')
+                return this.defaultModel
+            return {providerId: 'ollama', modelId: 'qwen2.5-coder:7b'}
         }
 
         // 4. Mapped task (e.g. 'code', 'fast', 'local')
@@ -88,8 +92,11 @@ export class ModelRouter {
     }
 
     private resolveDefault(availableProviders: string[], useLocal = false): ModelTarget {
-        if (useLocal && availableProviders.includes('ollama'))
-            return {providerId: 'ollama', modelId: 'llama3.2'}
+        if (useLocal && availableProviders.includes('ollama')) {
+            if (this.defaultModel.providerId === 'ollama')
+                return this.defaultModel
+            return {providerId: 'ollama', modelId: 'qwen2.5-coder:7b'}
+        }
 
         // Check routes['default']
         const defaultRoute = this.routes.default
@@ -105,10 +112,10 @@ export class ModelRouter {
 
         // Fallback to first available provider
         const priorities: Array<{providerId: string; modelId: string}> = [
+            {providerId: 'ollama', modelId: 'qwen2.5-coder:7b'},
             {providerId: 'google', modelId: 'gemini-2.0-flash'},
             {providerId: 'openai', modelId: 'gpt-4o'},
             {providerId: 'anthropic', modelId: 'claude-3-7-sonnet'},
-            {providerId: 'ollama', modelId: 'llama3.2'},
         ]
 
         for (const candidate of priorities) {

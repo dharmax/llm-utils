@@ -1,4 +1,4 @@
-import type {GenerationResult, ModelTarget} from './types.mts'
+import type {GenerationResult, ModelTarget} from './types.mjs'
 
 export class ProviderCircuit {
     private readonly failures = new Map<string, string>()

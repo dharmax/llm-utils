@@ -1,4 +1,4 @@
-import type {ModelInfo, ProviderConfig} from './types.mts'
+import type {ModelInfo, ProviderConfig} from './types.mjs'
 
 export interface DiscoveryOptions {
     ollamaHost?: string | undefined

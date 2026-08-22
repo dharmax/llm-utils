@@ -5,7 +5,7 @@ import type {
     ProviderAdapter,
     ResponseFormat,
     Usage,
-} from './types.mts'
+} from './types.mjs'
 
 export class OpenAIAdapter implements ProviderAdapter {
     readonly id = 'openai'

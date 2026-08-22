@@ -3,7 +3,7 @@ import {
     GoogleAdapter,
     OllamaProvider,
     OpenAIAdapter,
-} from './adapters.mts'
+} from './adapters.mjs'
 import type {
     GenerateOptions,
     GenerationResult,
@@ -11,7 +11,7 @@ import type {
     ProviderAdapter,
     ProviderConfig,
     ResponseFormat,
-} from './types.mts'
+} from './types.mjs'
 
 export interface CompletionOptions {
     system?: string | undefined

@@ -1,5 +1,5 @@
 import {PubSub} from '@dharmax/pubsub'
-import type {GenerationResult, Usage} from './types.mts'
+import type {GenerationResult, Usage} from './types.mjs'
 
 export interface LlmMetricEvent {
     timestamp: string

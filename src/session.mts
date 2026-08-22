@@ -1,6 +1,6 @@
-import type {Asker} from './asker.mts'
-import {MetricsEngine} from './metrics.mts'
-import type {AskOptions, GenerationResult} from './types.mts'
+import type {Asker} from './asker.mjs'
+import {MetricsEngine} from './metrics.mjs'
+import type {AskOptions, GenerationResult} from './types.mjs'
 
 export interface SessionMessage {
     role: 'user' | 'ai' | 'system'
