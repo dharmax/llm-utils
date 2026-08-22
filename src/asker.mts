@@ -65,7 +65,10 @@ export class Asker {
         } else {
             // Synchronous discovery from process.env
             const env = typeof process !== 'undefined' ? process.env : {}
-            const ollamaHost = env.OLLAMA_HOST ?? env.LOCAL_LLM_URL ?? 'http://127.0.0.1:11434'
+            const rawHost = env.OLLAMA_HOST ?? env.LOCAL_LLM_URL ?? 'http://127.0.0.1:11434'
+            const ollamaHost = rawHost.startsWith('http://') || rawHost.startsWith('https://')
+                ? rawHost
+                : `http://${rawHost}`
             const discovered: Record<string, ProviderConfig> = {
                 ollama: {
                     id: 'ollama',
