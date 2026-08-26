@@ -20,7 +20,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "rm -rf dist && esbuild src/index.mts --bundle --platform=node --format=esm --outfile=dist/index.mjs --sourcemap --resolve-extensions=.mts,.mtsx,.js,.json --external:zod --external:node:fs/promises --external:node:path --external:node:child_process --external:node:util && tsc --emitDeclarationOnly --outDir dist",
+    "build": "rm -rf dist && esbuild src/index.mts --bundle --platform=node --format=esm --outfile=dist/index.mjs --sourcemap --resolve-extensions=.mts,.mtsx,.js,.json --external:zod --external:node:fs/promises --external:node:fs --external:node:path --external:node:url --external:node:child_process --external:node:util && tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run test",
     "test": "npm run build && node --test tests/**/*.test.mjs",
@@ -44,7 +44,7 @@
   },
   "homepage": "https://github.com/dharmax/llm-utils#readme",
   "dependencies": {
-    "@dharmax/pubsub": "^1.2.0",
+    "@dharmax/pubsub": "file:../pubsub",
     "jsonrepair": "^3.14.1",
     "zod": "^4.4.3"
   },

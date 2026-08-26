@@ -1,7 +1,7 @@
 import type {ZodType} from 'zod'
 import {CompletionEngine} from './completion.mjs'
 import {type ContextRequest, type ContextResolver, resolveContext} from './context.mjs'
-import {PromptEngine} from './prompts.mjs'
+import {FileTemplateSource, PromptEngine} from './prompts.mjs'
 import {ProviderCircuit} from './provider-circuit.mjs'
 import {ModelRouter} from './routing.mjs'
 import {
@@ -25,6 +25,7 @@ export interface AskerOptions {
     preferLocal?: boolean | undefined
     completion?: CompletionEngine | undefined
     promptEngine?: PromptEngine | undefined
+    promptsDir?: string | URL | undefined
     context?: ContextResolver | undefined
     circuit?: ProviderCircuit | undefined
 }
@@ -40,7 +41,7 @@ export class Asker {
 
     constructor(options: AskerOptions = {}) {
         this.completion = options.completion ?? new CompletionEngine()
-        this.promptEngine = options.promptEngine ?? new PromptEngine()
+        this.promptEngine = options.promptEngine ?? (options.promptsDir ? new PromptEngine(new FileTemplateSource(options.promptsDir)) : new PromptEngine())
         this.circuit = options.circuit ?? new ProviderCircuit()
         this.defaultContext = options.context
         this.preferLocal = Boolean(options.preferLocal)

@@ -62,7 +62,7 @@ export class ProviderDiscovery {
                 id: 'openai',
                 apiKey: env.OPENAI_API_KEY,
                 baseUrl: env.OPENAI_BASE_URL,
-                available: Boolean(env.OPENAI_API_KEY),
+                available: Boolean(env.OPENAI_API_KEY || env.OPENAI_BASE_URL),
                 local: false,
             },
             google: {

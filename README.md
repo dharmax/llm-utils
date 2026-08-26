@@ -148,33 +148,87 @@ const claude = await asker.ask('Creative story', { model: 'anthropic/claude-3-7-
 
 ---
 
-## Prompt Templates & Procedural Generation
+## Prompt Templates & File Management
 
 ### 1. Template Files with Frontmatter
 
-`PromptEngine` loads templates with optional JSON frontmatter and renders `{{ variables }}`:
+Templates can be stored as `.prompt`, `.md`, or `.txt` files with YAML or JSON frontmatter:
 
-```text
---- json
-{"taskType": "code", "system": "You are a principal engineer."}
+```markdown
 ---
-Review this diff for {{ language }}:
-{{ context }}
+system: You are a principal software architect.
+taskType: code
+---
+Review this diff for {{ project.name }}:
+{{ diff }}
 ```
 
-Execute template with context:
+Nested dot-notation paths (`{{ project.owner.name }}`) and comments (`<!-- hidden comment -->`) are supported natively.
+
+### 2. Loading from Filesystem (`promptsDir` & `FileTemplateSource`)
+
+Pass `promptsDir` directly to `Asker` to auto-wire template loading relative to the current module or directory:
 
 ```ts
+import { Asker } from '@dharmax/llm-utils'
+
+const asker = new Asker({
+    promptsDir: new URL('./templates', import.meta.url),
+})
+
+// Loads './templates/code-review.prompt' (or .md), renders variables, and executes:
 const result = await asker.prompt('code-review', {
-    language: 'TypeScript',
-    inputText: 'function add(a, b) { return a + b }',
-}, {
-    // Plugs directly into @dharmax/context-manager or any custom resolver
-    context: async (req) => `Relevant guideline: Always type parameters.`,
+    project: { name: 'Semantic Studio' },
+    diff: '+const answer = 42;',
+})
+console.log(result.text)
+```
+
+### 3. Standalone `PromptEngine` & `FileTemplateSource`
+
+For rendering or inspection without executing an LLM request:
+
+```ts
+import { PromptEngine, FileTemplateSource } from '@dharmax/llm-utils'
+
+const fileSource = new FileTemplateSource(new URL('./templates', import.meta.url))
+const engine = new PromptEngine(fileSource)
+
+// 1. Load template & metadata
+const { content, manifest } = await engine.load('code-review')
+console.log(manifest.system) // "You are a principal software architect."
+
+// 2. Render variables
+const rendered = engine.render(content, {
+    project: { name: 'Semantic Studio' },
+    diff: '+const answer = 42;',
 })
 ```
 
-### 2. Procedural Prompt Generation (Rant / Combinatorial Fuzzing)
+### 4. Typed JSON with Prompt Templates (`asker.promptJson()`)
+
+Combine template rendering with strict Zod validation and local repair:
+
+```ts
+import { Asker, z } from '@dharmax/llm-utils'
+
+const schema = z.object({
+    approved: z.boolean(),
+    score: z.number().min(0).max(100),
+    comments: z.array(z.string()),
+})
+
+const result = await asker.promptJson('code-review', {
+    project: { name: 'Text Compiler' },
+    diff: '+const valid = true;',
+}, schema)
+
+if (result.ok && result.data) {
+    console.log(result.data.approved, result.data.score)
+}
+```
+
+### 5. Procedural Prompt Generation (Rant / Combinatorial Fuzzing)
 
 For A/B prompt testing, prompt fuzzing, or synthetic variation generation, you can plug procedural text generators (like [Rant / rantjs](https://github.com/robbestad/Rantjs)) directly into `PromptEngine` via custom loaders:
 
@@ -182,7 +236,6 @@ For A/B prompt testing, prompt fuzzing, or synthetic variation generation, you c
 import { Asker, PromptEngine } from '@dharmax/llm-utils'
 import rant from 'rantjs' // or any procedural generator
 
-// Custom template source that dynamically expands procedural variations
 const proceduralSource = {
     async load(templateName: string) {
         const rawTemplate = await fetchTemplateString(templateName)
@@ -195,7 +248,6 @@ const asker = new Asker({
     promptEngine: new PromptEngine(proceduralSource),
 })
 
-// Executes with randomized procedural prompt variants on each call
 const result = await asker.prompt('summarize', { text: 'Article content...' })
 ```
 
@@ -267,7 +319,7 @@ export { z } from '@dharmax/llm-utils'
 export type { GenerationResult, ModelTarget, AskOptions, ProviderConfig } from '@dharmax/llm-utils'
 
 // Utilities & Engines
-export { CompletionEngine, ModelRouter, PromptEngine, ProviderCircuit, LlmMetrics, LLMSession } from '@dharmax/llm-utils'
+export { CompletionEngine, ModelRouter, PromptEngine, FileTemplateSource, ProviderCircuit, LlmMetrics, LLMSession } from '@dharmax/llm-utils'
 export { parseStructuredJson, parseStructuredJsonResult, zodToJsonSchema, ProviderDiscovery } from '@dharmax/llm-utils'
 ```
 

@@ -1,10 +1,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 
 import {
     Asker,
     CompletionEngine,
     createMetricsPubSub,
+    FileTemplateSource,
     InMemoryMetricsStore,
     LLMSession,
     LlmMetrics,
@@ -139,6 +143,65 @@ test('PromptEngine loads multipart templates, parses JSON frontmatter, and rende
         engine.render(loaded.content, {name: 'Ada', user: {id: 1, role: 'admin'}}),
         'Hello Ada | User: {\n  "id": 1,\n  "role": "admin"\n}',
     )
+})
+
+test('PromptEngine parses YAML frontmatter and resolves nested dot-notation paths', async () => {
+    const engine = new PromptEngine(new MemoryTemplateSource({
+        'profile': '---\ntaskType: code\nsystem: You are a principal engineer.\n---\nHello {{ user.profile.name }}! Role: {{ user.profile.role }}. Email: {{ user.contact.email }}',
+    }))
+
+    const loaded = await engine.load('profile')
+    assert.equal(loaded.manifest.taskType, 'code')
+    assert.equal(loaded.manifest.system, 'You are a principal engineer.')
+
+    const rendered = engine.render(loaded.content, {
+        user: {
+            profile: { name: 'Dharmax', role: 'architect' },
+            contact: { email: 'dev@example.com' }
+        }
+    })
+    assert.equal(rendered, 'Hello Dharmax! Role: architect. Email: dev@example.com')
+})
+
+test('FileTemplateSource loads prompt files from disk and integrates with Asker promptsDir', async () => {
+    const testDir = join(tmpdir(), `llm-test-prompts-${Date.now()}`)
+    mkdirSync(testDir, { recursive: true })
+
+    try {
+        writeFileSync(join(testDir, 'reviewer.md'), '---\nsystem: Strict Code Reviewer\n---\nReview diff for {{ project.name }}:\n{{ diff }}')
+        writeFileSync(join(testDir, 'calculator.system'), 'System calculator instructions')
+        writeFileSync(join(testDir, 'calculator.prompt'), 'Compute {{ expr }}')
+
+        const fileSource = new FileTemplateSource(testDir)
+        const engine = new PromptEngine(fileSource)
+
+        // 1. Direct FileTemplateSource loading of .md with frontmatter
+        const reviewer = await engine.load('reviewer')
+        assert.equal(reviewer.manifest.system, 'Strict Code Reviewer')
+        assert.equal(engine.render(reviewer.content, { project: { name: 'Semantic Studio' }, diff: '+const x = 1;' }), 'Review diff for Semantic Studio:\n+const x = 1;')
+
+        // 2. Multipart .system and .prompt loading from disk
+        const calc = await engine.load('calculator')
+        assert.equal(calc.manifest.system, 'System calculator instructions')
+        assert.equal(engine.render(calc.content, { expr: '2 + 2' }), 'Compute 2 + 2')
+
+        // 3. Asker with promptsDir auto-wiring
+        const providerId = 'unit-prompt-provider'
+        const completion = registerEchoAdapter(providerId)
+        const asker = new Asker({
+            promptsDir: testDir,
+            providers: { [providerId]: { id: providerId, available: true } },
+            completion,
+            defaultModel: `${providerId}/model-prompts`,
+        })
+
+        const res = await asker.prompt('reviewer', { project: { name: 'Text Compiler' }, diff: '-old\n+new' })
+        assert.equal(res.ok, true)
+        assert.equal(res.text.includes('system:Strict Code Reviewer'), true)
+        assert.equal(res.text.includes('prompt:Review diff for Text Compiler:\n-old\n+new'), true)
+    } finally {
+        rmSync(testDir, { recursive: true, force: true })
+    }
 })
 
 test('Asker executes direct ask with model routing', async () => {
