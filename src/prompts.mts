@@ -20,21 +20,11 @@ export class FileTemplateSource implements TemplateSource {
     }
 
     async load(name: string): Promise<string> {
-        const candidates = [
-            join(this.baseDir, name),
-            join(this.baseDir, `${name}.prompt`),
-            join(this.baseDir, `${name}.system`),
-            join(this.baseDir, `${name}.md`),
-            join(this.baseDir, `${name}.txt`),
-        ]
-
-        for (const filePath of candidates) {
-            try {
-                return await readFile(filePath, 'utf-8')
-            } catch {}
+        try {
+            return await readFile(join(this.baseDir, name), 'utf-8')
+        } catch {
+            return ''
         }
-
-        return ''
     }
 }
 
@@ -63,12 +53,16 @@ export class PromptEngine {
 
     async load(name: string): Promise<PromptTemplate> {
         const loader = this.source.fetch ?? this.source.load ?? (async () => '')
+        const directRaw = await loader.call(this.source, name).catch(() => '')
+        if (directRaw) {
+            return this.parse(directRaw)
+        }
+
         const systemRaw = await loader.call(this.source, `${name}.system`).catch(() => '')
         const promptRaw = await loader.call(this.source, `${name}.prompt`).catch(() => '')
-        const directRaw = (!systemRaw && !promptRaw) ? await loader.call(this.source, name).catch(() => '') : ''
 
         const system = this.parse(systemRaw)
-        const prompt = this.parse(promptRaw || directRaw || systemRaw)
+        const prompt = this.parse(promptRaw || systemRaw)
 
         const systemInstruction = system.content
             || (typeof system.manifest.system === 'string' ? system.manifest.system : undefined)

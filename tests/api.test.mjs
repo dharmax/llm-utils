@@ -176,7 +176,7 @@ test('FileTemplateSource loads prompt files from disk and integrates with Asker 
         const engine = new PromptEngine(fileSource)
 
         // 1. Direct FileTemplateSource loading of .md with frontmatter
-        const reviewer = await engine.load('reviewer')
+        const reviewer = await engine.load('reviewer.md')
         assert.equal(reviewer.manifest.system, 'Strict Code Reviewer')
         assert.equal(engine.render(reviewer.content, { project: { name: 'Semantic Studio' }, diff: '+const x = 1;' }), 'Review diff for Semantic Studio:\n+const x = 1;')
 
@@ -195,7 +195,7 @@ test('FileTemplateSource loads prompt files from disk and integrates with Asker 
             defaultModel: `${providerId}/model-prompts`,
         })
 
-        const res = await asker.prompt('reviewer', { project: { name: 'Text Compiler' }, diff: '-old\n+new' })
+        const res = await asker.prompt('reviewer.md', { project: { name: 'Text Compiler' }, diff: '-old\n+new' })
         assert.equal(res.ok, true)
         assert.equal(res.text.includes('system:Strict Code Reviewer'), true)
         assert.equal(res.text.includes('prompt:Review diff for Text Compiler:\n-old\n+new'), true)
