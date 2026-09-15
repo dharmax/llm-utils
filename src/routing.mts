@@ -19,7 +19,7 @@ export const DEFAULT_TASK_ROUTES: TaskRouteMap = {
     'reasoning': 'openai/o3-mini',
     'creative': 'anthropic/claude-3-7-sonnet',
     'summarization': 'google/gemini-2.0-flash',
-    'local': 'ollama/llama3.2',
+    'local': 'ollama/qwen2.5-coder:7b',
     'default': 'google/gemini-2.0-flash',
 }
 
