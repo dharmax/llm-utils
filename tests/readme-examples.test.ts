@@ -52,17 +52,17 @@ import {mkdtempSync, rmSync, writeFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
-function createEchoAsker(responses: Record<string, unknown> = {}): Asker {
+function createEchoAsker(responses: Record<string, unknown> = {}, options: {promptsDir?: string} = {}): Asker {
     const completion = new CompletionEngine([]).registerAdapter({
         id: 'mock-provider',
-        async generate(options) {
-            const prompt = options.prompt
+        async generate(genOptions) {
+            const prompt = genOptions.prompt
             for (const [key, val] of Object.entries(responses)) {
                 if (prompt.includes(key)) {
                     return {
                         ok: true,
                         text: typeof val === 'string' ? val : JSON.stringify(val),
-                        model: {providerId: 'mock-provider', modelId: options.modelId},
+                        model: {providerId: 'mock-provider', modelId: genOptions.modelId},
                         usage: {promptTokens: 10, completionTokens: 15, totalTokens: 25, available: true},
                     }
                 }
@@ -70,13 +70,14 @@ function createEchoAsker(responses: Record<string, unknown> = {}): Asker {
             return {
                 ok: true,
                 text: 'Mock response text for prompt: ' + prompt.slice(0, 50),
-                model: {providerId: 'mock-provider', modelId: options.modelId},
+                model: {providerId: 'mock-provider', modelId: genOptions.modelId},
                 usage: {promptTokens: 10, completionTokens: 15, totalTokens: 25, available: true},
             }
         },
     })
 
     return new Asker({
+        promptsDir: options.promptsDir,
         providers: {
             'mock-provider': {id: 'mock-provider', available: true},
             openai: {id: 'openai', available: true},
@@ -431,7 +432,9 @@ test('README snippet: Multi-Phase Agent Pipelines (LLMPipeline)', async () => {
                 execute: ({credits}) => ({discountPercent: credits > 400 ? 20 : 10}),
             },
         ],
-        onPhaseChange: (phase) => phasesObserved.push(phase),
+        onPhaseChange: (phase) => {
+            phasesObserved.push(phase)
+        },
     })
 
     const result = await pipeline.run(
@@ -615,8 +618,7 @@ Suggest up to {{ maxSuggestions }} indexes.`,
                 estimatedSpeedup: '10x',
                 risks: ['Minimal index write overhead'],
             },
-        })
-        asker.promptEngine = new PromptEngine(new FileTemplateSource(tempDir))
+        }, {promptsDir: tempDir})
 
         const RecommendationSchema = z.object({
             suggestedIndexes: z.array(z.string()),

@@ -39,6 +39,8 @@ export interface LlmFailure {
     raw?: unknown
 }
 
+export type GenerationFailure = LlmFailure
+
 export interface Usage {
     promptTokens: number
     completionTokens: number

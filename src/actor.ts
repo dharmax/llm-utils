@@ -5,7 +5,7 @@ import {type ContextResolver, resolveContext} from './context.ts'
 import {parseStructuredJsonResult, zodToJsonSchema} from './structured-json.ts'
 import type {AskOptions} from './types.ts'
 
-export interface ToolDefinition<TParams = unknown, TResult = unknown> {
+export interface ToolDefinition<TParams = any, TResult = any> {
     name: string
     description: string
     parameters: ZodType<TParams>
@@ -96,18 +96,10 @@ export function normalizeToolParameters(params: Record<string, unknown>, schema:
     for (const [key, val] of Object.entries(normalized)) {
         if (typeof val === 'object' && val !== null && !Array.isArray(val)) {
             const inner = val as Record<string, unknown>
-            if ('value' in inner) {
-                normalized[key] = inner.value
-            } else if (key in inner) {
+            if (key in inner) {
                 normalized[key] = inner[key]
-            } else if ('average' in inner && typeof inner.average === 'string') {
-                normalized[key] = inner.average
-            } else if ('formula' in inner && typeof inner.formula === 'string') {
-                normalized[key] = inner.formula
-            } else if ('expr' in inner && typeof inner.expr === 'string') {
-                normalized[key] = inner.expr
-            } else if ('expression' in inner && typeof inner.expression === 'string') {
-                normalized[key] = inner.expression
+            } else if ('value' in inner) {
+                normalized[key] = inner.value
             } else if ('description' in inner && typeof inner.description === 'string') {
                 normalized[key] = inner.description
             } else if ('text' in inner && typeof inner.text === 'string') {

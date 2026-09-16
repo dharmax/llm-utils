@@ -62,7 +62,27 @@ function parseArgs(): {
     oncePrompt?: string
 } {
     const args = process.argv.slice(2)
-    let host = process.env.OLLAMA_HOST || 'http://lotus:11434'
+
+    if (args.includes('--help') || args.includes('-h')) {
+        console.log(`
+Usage: bun run cli [options] [prompt...]
+       llm [options] [prompt...]
+
+Options:
+  --host <url>        Ollama or local server host URL (default: $OLLAMA_HOST or http://127.0.0.1:11434)
+  --model <model>     Target model name (auto-selects best local model if omitted)
+  --max-steps <n>     Maximum agent execution steps (default: 8)
+  --once <prompt>     Run single-shot prompt and exit without starting REPL
+  -h, --help          Show this help message and exit
+
+Interactive REPL:
+  Run without prompt arguments to enter the interactive multi-tool REPL.
+  REPL Commands: /tools, /models, /clear, exit
+`)
+        process.exit(0)
+    }
+
+    let host = process.env.OLLAMA_HOST || process.env.LOCAL_LLM_URL || 'http://127.0.0.1:11434'
     let model: string | undefined = undefined
     let maxSteps = 8
     const promptParts: string[] = []
@@ -143,11 +163,11 @@ async function main() {
             }
             for (const res of record.toolResults) {
                 const icon = res.isError ? '\x1b[31m❌ [Error]\x1b[0m' : '\x1b[32m📥 [Result]\x1b[0m'
-                const snippet = res.isError
+                const snippet = (res.isError
                     ? res.error
                     : typeof res.result === 'object'
                         ? JSON.stringify(res.result)
-                        : String(res.result)
+                        : String(res.result)) ?? ''
                 console.log(`${icon} ${snippet.slice(0, 300)}${snippet.length > 300 ? '...' : ''}`)
             }
         },

@@ -14,8 +14,8 @@ import {
 } from '../src/index.ts'
 
 test('parses direct object and array roots', () => {
-    expect(parseStructuredJson('{"value":1}')).toEqual({value: 1})
-    expect(parseStructuredJson('[1,2,3]')).toEqual([1, 2, 3])
+    expect<any>(parseStructuredJson('{"value":1}')).toEqual({value: 1})
+    expect<any>(parseStructuredJson('[1,2,3]')).toEqual([1, 2, 3])
 })
 
 test('parses fenced and prose-surrounded JSON', () => {
@@ -35,7 +35,7 @@ test('extractJsonCandidate handles fences and outer delimiters correctly', () =>
 })
 
 test('deterministically repairs malformed object-shaped JSON using jsonrepair', () => {
-    expect(
+    expect<any>(
         parseStructuredJson("{value: 'repaired', trailing: [1,2,],}"),
     ).toEqual({value: 'repaired', trailing: [1, 2]})
 })
@@ -44,7 +44,9 @@ test('rejects unrecoverable JSON, prose, and scalar JSON roots', () => {
     for (const raw of ['', '   ', 'only prose', '"json string"', '42', 'true']) {
         const result = parseStructuredJsonResult(raw)
         expect(result.ok).toBe(false)
-        expect(result.kind).toBe('parse_failed')
+        if (!result.ok) {
+            expect(result.kind).toBe('parse_failed')
+        }
     }
 })
 
@@ -56,9 +58,11 @@ test('Zod validation returns detailed error messages on schema failure', () => {
     })
     const result = parseStructuredJsonResult('{"outer":{"rows":[{"name":"x"}]}}', schema)
     expect(result.ok).toBe(false)
-    expect(result.kind).toBe('schema_invalid')
-    expect(result.message).toMatch(/outer\.rows\.0\.name/)
-    expect(result.zodIssues?.[0]?.path.join('.')).toBe('outer.rows.0.name')
+    if (!result.ok) {
+        expect(result.kind).toBe('schema_invalid')
+        expect(result.message).toMatch(/outer\.rows\.0\.name/)
+        expect(result.zodIssues?.[0]?.path.join('.')).toBe('outer.rows.0.name')
+    }
 })
 
 test('zodToJsonSchema converts representable schemas', () => {
@@ -86,7 +90,7 @@ test('OpenAI, Google, and Ollama format payloads and normalize URLs correctly', 
     const originalFetch = globalThis.fetch
     const calls: Array<{url: string; body: any}> = []
 
-    globalThis.fetch = async (url, init) => {
+    globalThis.fetch = (async (url: any, init?: any) => {
         const body = JSON.parse(String(init?.body))
         calls.push({url: String(url), body})
         if (String(url).includes('openai')) {
@@ -100,7 +104,7 @@ test('OpenAI, Google, and Ollama format payloads and normalize URLs correctly', 
             }))
         }
         return new Response(JSON.stringify({message: {content: '{"value":"ollama"}'}}))
-    }
+    }) as any
 
     try {
         const format = {

@@ -28,6 +28,7 @@
   "scripts": {
     "build": "rm -rf dist && esbuild src/index.ts --bundle --platform=neutral --format=esm --outfile=dist/index.js --sourcemap --resolve-extensions=.ts,.tsx,.js,.json --external:zod && tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
+    "typecheck:all": "tsc --noEmit -p tsconfig.check.json",
     "check": "bun test",
     "test": "bun test",
     "cli": "bun bin/cli.ts",

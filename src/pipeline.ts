@@ -361,7 +361,7 @@ Output an ordered execution plan with step IDs and dependencies.`
                     const criticPrompt = `The agent encountered a failure while executing this sub-goal:
 Goal: ${step.description}
 Prerequisites: ${prereqContext || 'None'}
-Error: ${stepResult.error}
+Error: ${stepError}
 Last Observation: ${JSON.stringify(lastStep?.toolResults ?? {})}
 
 Provide a single concise corrective instruction ("wisdom") for how to format parameters or call tools correctly on retry.`

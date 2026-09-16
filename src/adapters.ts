@@ -59,11 +59,23 @@ export class AnthropicAdapter implements ProviderAdapter {
     readonly id = 'anthropic'
 
     async generate(options: GenerateOptions): Promise<GenerationResult> {
-        const {modelId, prompt, system, config, signal, timeoutMs, temperature} = options
+        const {modelId, prompt, system, config, format, signal, timeoutMs, temperature} = options
         if (!config.apiKey)
             return missingApiKey(this.id, modelId)
 
         const baseUrl = (config.baseUrl ?? 'https://api.anthropic.com/v1').replace(/\/+$/, '')
+
+        const isJson = isJsonFormat(format)
+        const schema = format && typeof format === 'object' && format.type === 'json_schema' ? format.schema : undefined
+
+        let effectiveSystem = system
+        if (schema) {
+            const schemaInstruction = `You MUST return strictly valid JSON matching this schema:\n${JSON.stringify(schema, null, 2)}\nDo not enclose in markdown code fences or add explanations.`
+            effectiveSystem = effectiveSystem ? `${effectiveSystem}\n\n${schemaInstruction}` : schemaInstruction
+        } else if (isJson) {
+            const jsonInstruction = 'You MUST return strictly valid JSON. Do not enclose in markdown code fences or add explanations.'
+            effectiveSystem = effectiveSystem ? `${effectiveSystem}\n\n${jsonInstruction}` : jsonInstruction
+        }
 
         return postJson({
             providerId: this.id,
@@ -76,7 +88,7 @@ export class AnthropicAdapter implements ProviderAdapter {
             body: {
                 model: modelId,
                 messages: [{role: 'user', content: prompt}],
-                system: system || undefined,
+                system: effectiveSystem || undefined,
                 max_tokens: 4096,
                 temperature: temperature ?? 0.1,
             },

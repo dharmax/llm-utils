@@ -79,7 +79,7 @@ test('parseStructuredJson extracts, repairs, and validates model responses', () 
 
 test('provider HTTP failures preserve typed quota evidence', async () => {
     const originalFetch = globalThis.fetch
-    globalThis.fetch = async () => new Response(JSON.stringify({
+    globalThis.fetch = (async () => new Response(JSON.stringify({
         error: {
             code: 'insufficient_quota',
             message: 'No API credits remain.',
@@ -87,7 +87,7 @@ test('provider HTTP failures preserve typed quota evidence', async () => {
     }), {
         status: 429,
         headers: {'Content-Type': 'application/json'},
-    })
+    })) as any
 
     try {
         const completion = new CompletionEngine([new OpenAIAdapter()])
@@ -378,7 +378,7 @@ test('LlmMetrics aggregates totals, groupings, and pubsub events', () => {
 
 test('ProviderDiscovery auto-detects and normalizes ollama host', async () => {
     const originalFetch = globalThis.fetch
-    globalThis.fetch = async () => ({
+    globalThis.fetch = (async () => ({
         ok: true,
         async json() {
             return {
@@ -387,7 +387,7 @@ test('ProviderDiscovery auto-detects and normalizes ollama host', async () => {
                 ],
             }
         },
-    } as any)
+    })) as any
 
     try {
         const state = await ProviderDiscovery.discover({
