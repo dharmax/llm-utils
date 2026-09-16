@@ -1,12 +1,11 @@
-import assert from 'node:assert/strict'
-import test from 'node:test'
+import {expect, test} from 'bun:test'
 import {
     Asker,
     calculateUsageCost,
     CompletionEngine,
     ProviderCircuit,
     z,
-} from '../dist/index.js'
+} from '../src/index.ts'
 
 test('Asker.json executes and validates with an inferred schema result', async () => {
     let calls = 0
@@ -29,10 +28,10 @@ test('Asker.json executes and validates with an inferred schema result', async (
         model: 'mock/exact',
     })
 
-    assert.equal(result.ok, true)
-    assert.equal(result.data.value, 7)
-    assert.equal(result.model.modelId, 'exact')
-    assert.equal(calls, 1)
+    expect(result.ok).toBe(true)
+    expect(result.data?.value).toBe(7)
+    expect(result.model?.modelId).toBe('exact')
+    expect(calls).toBe(1)
 })
 
 test('fatal provider circuits are instance-owned and block future requests', async () => {
@@ -46,7 +45,7 @@ test('fatal provider circuits are instance-owned and block future requests', asy
             ok: false,
             model: target,
             failure: {
-                kind: 'authentication',
+                kind: 'authentication' as const,
                 message: 'Denied.',
                 retryable: false,
                 fatal: true,
@@ -56,8 +55,8 @@ test('fatal provider circuits are instance-owned and block future requests', asy
     await circuit.execute(target, fail)
     const blocked = await circuit.execute(target, fail)
 
-    assert.equal(calls, 1)
-    assert.match(blocked.failure.message, /circuit open/i)
+    expect(calls).toBe(1)
+    expect(blocked.failure?.message).toMatch(/circuit open/i)
 })
 
 test('usage cost calculates correctly with pricing rates', () => {
@@ -67,9 +66,9 @@ test('usage cost calculates correctly with pricing rates', () => {
         totalTokens: 1_500_000,
         available: true,
     }
-    assert.equal(calculateUsageCost(usage), 0)
-    assert.equal(calculateUsageCost(usage, {
+    expect(calculateUsageCost(usage)).toBe(0)
+    expect(calculateUsageCost(usage, {
         inputCostPerMillionTokensUsd: 2,
         outputCostPerMillionTokensUsd: 4,
-    }), 4)
+    })).toBe(4)
 })

@@ -3,14 +3,14 @@
 Ultra-lean, strictly typed TypeScript primitives for LLM execution, automatic structured JSON with auto-repair, dynamic model routing, local LLM support (Ollama / OpenAI-compatible), prompt templates, context injection, autonomous tool execution (`LLMActor`), multi-turn sessions, and telemetry metrics.
 
 ```
-Zero-Config Setup  →  1-Line Asks  →  Typed JSON (Zod)  →  Autonomous Acting  →  Bun & Node Native
+Zero-Config Setup  →  1-Line Asks  →  Typed JSON (Zod)  →  Autonomous Acting  →  Modern Bun Native
 ```
 
 ---
 
 ## Highlights
 
-* **Bun-First & Node Compatible**: Ships native TypeScript source under the `"bun"` package export condition for instant zero-bundle execution in Bun, with pre-bundled ESM for Node.js 20+.
+* **Pure Modern Bun**: Built natively for Bun. Direct execution from `.ts` TypeScript source via the `"bun"` export condition with zero bundle or compilation overhead.
 * **First-Class Local LLM Support**: Native Ollama provider with `/api/chat`, host auto-detection (`OLLAMA_HOST` / `LOCAL_LLM_URL`), model discovery via `/api/tags`, and `preferLocal` routing to run 100% offline & private.
 * **OpenAI-Compatible Local Servers**: Seamlessly connects to vLLM, LM Studio, LocalAI, or llama.cpp servers via custom `baseUrl`.
 * **Zero-Ceremony Setup**: Automatically reads `OPENAI_API_KEY`, `GEMINI_API_KEY` / `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, `OLLAMA_HOST`, and `LOCAL_LLM_URL` from `process.env`.
@@ -26,10 +26,6 @@ Zero-Config Setup  →  1-Line Asks  →  Typed JSON (Zod)  →  Autonomous Acti
 ## Installation
 
 ```sh
-# npm
-npm install @dharmax/llm-utils zod
-
-# bun
 bun add @dharmax/llm-utils zod
 ```
 
@@ -82,10 +78,6 @@ Run directly:
 bun run index.ts
 ```
 
-In **Node.js**, pre-bundled ESM from `dist/` is automatically used:
-```sh
-node --import tsx index.ts
-```
 
 ---
 
@@ -486,15 +478,9 @@ export {
 ## Development & Verification
 
 ```sh
-# Bun (Instant TypeScript execution)
-bun test           # Runs all 43 tests in native TS mode (under 200ms)
-bun run check      # Full typecheck + test suite
-
-# Node.js
-npm run build      # Bundles with esbuild and emits .d.ts declarations
-npm run typecheck  # Strict TypeScript check (tsc --noEmit)
-npm test           # Executes Node.js test runner against dist/
-npm run check      # Typecheck + Build + Node tests
+bun test           # Runs all 43 tests via bun:test (under 250ms)
+bun run typecheck  # Strict TypeScript check (tsc --noEmit)
+bun run build      # Bundles neutral ESM and emits .d.ts declarations
 ```
 
 ---

@@ -1,6 +1,3 @@
-import {readFile} from 'node:fs/promises'
-import {join} from 'node:path'
-import {fileURLToPath} from 'node:url'
 import type {PromptTemplate} from './types.ts'
 
 export interface TemplateSource {
@@ -12,7 +9,7 @@ export class FileTemplateSource implements TemplateSource {
     private readonly baseDir: string
 
     constructor(baseDir: string | URL) {
-        this.baseDir = baseDir instanceof URL ? fileURLToPath(baseDir) : baseDir
+        this.baseDir = baseDir instanceof URL ? decodeURIComponent(baseDir.pathname) : baseDir
     }
 
     async fetch(name: string): Promise<string> {
@@ -21,7 +18,11 @@ export class FileTemplateSource implements TemplateSource {
 
     async load(name: string): Promise<string> {
         try {
-            return await readFile(join(this.baseDir, name), 'utf-8')
+            const cleanBase = this.baseDir.endsWith('/') ? this.baseDir.slice(0, -1) : this.baseDir
+            const file = Bun.file(`${cleanBase}/${name}`)
+            if (!(await file.exists()))
+                return ''
+            return await file.text()
         } catch {
             return ''
         }

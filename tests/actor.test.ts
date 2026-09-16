@@ -1,13 +1,12 @@
-import assert from 'node:assert/strict'
-import test from 'node:test'
+import {expect, test} from 'bun:test'
 import {
     Asker,
     CompletionEngine,
     LLMActor,
     z,
-} from '../dist/index.js'
+} from '../src/index.ts'
 
-function createMockAsker(responses) {
+function createMockAsker(responses: any[]) {
     let callIndex = 0
     const completion = new CompletionEngine([]).registerAdapter({
         id: 'mock',
@@ -37,16 +36,16 @@ test('LLMActor registers, retrieves, and unregisters tools', () => {
         name: 'test_tool',
         description: 'A test tool',
         parameters: z.object({query: z.string()}),
-        execute: ({query}) => `echo:${query}`,
+        execute: ({query}: {query: string}) => `echo:${query}`,
     }
 
     actor.registerTool(tool)
-    assert.equal(actor.getTools().length, 1)
-    assert.equal(actor.getTool('test_tool')?.name, 'test_tool')
+    expect(actor.getTools().length).toBe(1)
+    expect(actor.getTool('test_tool')?.name).toBe('test_tool')
 
     actor.unregisterTool('test_tool')
-    assert.equal(actor.getTools().length, 0)
-    assert.equal(actor.getTool('test_tool'), undefined)
+    expect(actor.getTools().length).toBe(0)
+    expect(actor.getTool('test_tool')).toBeUndefined()
 })
 
 test('LLMActor.step returns final_answer when model decides goal is achieved', async () => {
@@ -61,10 +60,10 @@ test('LLMActor.step returns final_answer when model decides goal is achieved', a
     const actor = new LLMActor(asker)
     const result = await actor.step('What is the capital of France?')
 
-    assert.equal(result.isDone, true)
-    assert.equal(result.record.action, 'final_answer')
-    assert.equal(result.record.finalAnswer, 'Paris is the capital of France.')
-    assert.equal(result.record.step, 1)
+    expect(result.isDone).toBe(true)
+    expect(result.record.action).toBe('final_answer')
+    expect(result.record.finalAnswer).toBe('Paris is the capital of France.')
+    expect(result.record.step).toBe(1)
 })
 
 test('LLMActor.step executes tool and records execution result', async () => {
@@ -85,7 +84,7 @@ test('LLMActor.step executes tool and records execution result', async () => {
                 name: 'add',
                 description: 'Add two numbers',
                 parameters: z.object({a: z.number(), b: z.number()}),
-                execute: ({a, b}) => {
+                execute: ({a, b}: {a: number; b: number}) => {
                     executed = true
                     return a + b
                 },
@@ -94,13 +93,13 @@ test('LLMActor.step executes tool and records execution result', async () => {
     })
 
     const result = await actor.step('Compute 2 + 2')
-    assert.equal(executed, true)
-    assert.equal(result.isDone, false)
-    assert.equal(result.record.toolCalls.length, 1)
-    assert.equal(result.record.toolResults.length, 1)
-    assert.equal(result.record.toolResults[0].callId, 'c1')
-    assert.equal(result.record.toolResults[0].isError, false)
-    assert.equal(result.record.toolResults[0].result, 4)
+    expect(executed).toBe(true)
+    expect(result.isDone).toBe(false)
+    expect(result.record.toolCalls.length).toBe(1)
+    expect(result.record.toolResults.length).toBe(1)
+    expect(result.record.toolResults[0].callId).toBe('c1')
+    expect(result.record.toolResults[0].isError).toBe(false)
+    expect(result.record.toolResults[0].result).toBe(4)
 })
 
 test('LLMActor.run orchestrates multi-turn loop to completion', async () => {
@@ -121,14 +120,14 @@ test('LLMActor.run orchestrates multi-turn loop to completion', async () => {
         },
     ])
 
-    const stepsObserved = []
+    const stepsObserved: any[] = []
     const actor = new LLMActor(asker, {
         tools: [
             {
                 name: 'getUser',
                 description: 'Fetch user details',
                 parameters: z.object({userId: z.string()}),
-                execute: ({userId}) => ({id: userId, active: true}),
+                execute: ({userId}: {userId: string}) => ({id: userId, active: true}),
             },
         ],
         onStep: (record) => {
@@ -138,11 +137,11 @@ test('LLMActor.run orchestrates multi-turn loop to completion', async () => {
 
     const result = await actor.run('Check user u123 status')
 
-    assert.equal(result.ok, true)
-    assert.equal(result.haltReason, 'completed')
-    assert.equal(result.totalSteps, 2)
-    assert.equal(result.finalText, 'User u123 is active.')
-    assert.equal(stepsObserved.length, 2)
+    expect(result.ok).toBe(true)
+    expect(result.haltReason).toBe('completed')
+    expect(result.totalSteps).toBe(2)
+    expect(result.finalText).toBe('User u123 is active.')
+    expect(stepsObserved.length).toBe(2)
 })
 
 test('LLMActor catches and contains tool exceptions without crashing', async () => {
@@ -170,9 +169,9 @@ test('LLMActor catches and contains tool exceptions without crashing', async () 
     })
 
     const result = await actor.step('Trigger failure')
-    assert.equal(result.isDone, false)
-    assert.equal(result.record.toolResults[0].isError, true)
-    assert.equal(result.record.toolResults[0].error, 'Connection refused')
+    expect(result.isDone).toBe(false)
+    expect(result.record.toolResults[0].isError).toBe(true)
+    expect(result.record.toolResults[0].error).toBe('Connection refused')
 })
 
 test('LLMActor validates tool parameters against Zod schema', async () => {
@@ -201,9 +200,9 @@ test('LLMActor validates tool parameters against Zod schema', async () => {
     })
 
     const result = await actor.step('Call strict')
-    assert.equal(executed, false)
-    assert.equal(result.record.toolResults[0].isError, true)
-    assert.match(result.record.toolResults[0].error, /Invalid parameters/)
+    expect(executed).toBe(false)
+    expect(result.record.toolResults[0].isError).toBe(true)
+    expect(result.record.toolResults[0].error).toMatch(/Invalid parameters/)
 })
 
 test('LLMActor handles unregistered tool gracefully', async () => {
@@ -219,8 +218,8 @@ test('LLMActor handles unregistered tool gracefully', async () => {
 
     const actor = new LLMActor(asker)
     const result = await actor.step('Call phantom')
-    assert.equal(result.record.toolResults[0].isError, true)
-    assert.match(result.record.toolResults[0].error, /not registered/)
+    expect(result.record.toolResults[0].isError).toBe(true)
+    expect(result.record.toolResults[0].error).toMatch(/not registered/)
 })
 
 test('LLMActor.run halts with max_steps_exceeded when budget is exhausted', async () => {
@@ -247,10 +246,10 @@ test('LLMActor.run halts with max_steps_exceeded when budget is exhausted', asyn
     })
 
     const result = await actor.run('Never-ending task')
-    assert.equal(result.ok, false)
-    assert.equal(result.haltReason, 'max_steps_exceeded')
-    assert.equal(result.totalSteps, 3)
-    assert.match(result.error, /Exceeded maximum step budget of 3/)
+    expect(result.ok).toBe(false)
+    expect(result.haltReason).toBe('max_steps_exceeded')
+    expect(result.totalSteps).toBe(3)
+    expect(result.error).toMatch(/Exceeded maximum step budget of 3/)
 })
 
 test('LLMActor.run respects AbortSignal', async () => {
@@ -267,8 +266,8 @@ test('LLMActor.run respects AbortSignal', async () => {
 
     const actor = new LLMActor(asker)
     const result = await actor.run('Aborted task', {signal: controller.signal})
-    assert.equal(result.ok, false)
-    assert.equal(result.haltReason, 'aborted')
+    expect(result.ok).toBe(false)
+    expect(result.haltReason).toBe('aborted')
 })
 
 test('LLMActor.run parses structured output schema when specified', async () => {
@@ -288,7 +287,7 @@ test('LLMActor.run parses structured output schema when specified', async () => 
     const actor = new LLMActor(asker)
     const result = await actor.run('Health check', {schema: ResultSchema})
 
-    assert.equal(result.ok, true)
-    assert.equal(result.haltReason, 'completed')
-    assert.deepEqual(result.output, {status: 'healthy', latency: 42})
+    expect(result.ok).toBe(true)
+    expect(result.haltReason).toBe('completed')
+    expect(result.output).toEqual({status: 'healthy', latency: 42})
 })

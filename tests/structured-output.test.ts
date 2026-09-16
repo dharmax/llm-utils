@@ -1,5 +1,4 @@
-import assert from 'node:assert/strict'
-import test from 'node:test'
+import {expect, test} from 'bun:test'
 import {
     Asker,
     CompletionEngine,
@@ -12,43 +11,40 @@ import {
     resolveResponseFormat,
     z,
     zodToJsonSchema,
-} from '../dist/index.js'
+} from '../src/index.ts'
 
 test('parses direct object and array roots', () => {
-    assert.deepEqual(parseStructuredJson('{"value":1}'), {value: 1})
-    assert.deepEqual(parseStructuredJson('[1,2,3]'), [1, 2, 3])
+    expect(parseStructuredJson('{"value":1}')).toEqual({value: 1})
+    expect(parseStructuredJson('[1,2,3]')).toEqual([1, 2, 3])
 })
 
 test('parses fenced and prose-surrounded JSON', () => {
     const schema = z.object({value: z.string()})
-    assert.deepEqual(
+    expect(
         parseStructuredJson('before ```json\n{"value":"fenced"}\n``` after', schema),
-        {value: 'fenced'},
-    )
-    assert.deepEqual(
+    ).toEqual({value: 'fenced'})
+    expect(
         parseStructuredJson('The result is {"value":"embedded"}; done.', schema),
-        {value: 'embedded'},
-    )
+    ).toEqual({value: 'embedded'})
 })
 
 test('extractJsonCandidate handles fences and outer delimiters correctly', () => {
-    assert.equal(extractJsonCandidate('```json\n{"a":1}\n```'), '{"a":1}')
-    assert.equal(extractJsonCandidate('prose prefix {"a":1} prose suffix'), '{"a":1}')
-    assert.equal(extractJsonCandidate('prose prefix [1, 2, 3] prose suffix'), '[1, 2, 3]')
+    expect(extractJsonCandidate('```json\n{"a":1}\n```')).toBe('{"a":1}')
+    expect(extractJsonCandidate('prose prefix {"a":1} prose suffix')).toBe('{"a":1}')
+    expect(extractJsonCandidate('prose prefix [1, 2, 3] prose suffix')).toBe('[1, 2, 3]')
 })
 
 test('deterministically repairs malformed object-shaped JSON using jsonrepair', () => {
-    assert.deepEqual(
+    expect(
         parseStructuredJson("{value: 'repaired', trailing: [1,2,],}"),
-        {value: 'repaired', trailing: [1, 2]},
-    )
+    ).toEqual({value: 'repaired', trailing: [1, 2]})
 })
 
 test('rejects unrecoverable JSON, prose, and scalar JSON roots', () => {
     for (const raw of ['', '   ', 'only prose', '"json string"', '42', 'true']) {
         const result = parseStructuredJsonResult(raw)
-        assert.equal(result.ok, false, raw)
-        assert.equal(result.kind, 'parse_failed', raw)
+        expect(result.ok).toBe(false)
+        expect(result.kind).toBe('parse_failed')
     }
 })
 
@@ -59,10 +55,10 @@ test('Zod validation returns detailed error messages on schema failure', () => {
         }),
     })
     const result = parseStructuredJsonResult('{"outer":{"rows":[{"name":"x"}]}}', schema)
-    assert.equal(result.ok, false)
-    assert.equal(result.kind, 'schema_invalid')
-    assert.match(result.message, /outer\.rows\.0\.name/)
-    assert.equal(result.zodIssues[0].path.join('.'), 'outer.rows.0.name')
+    expect(result.ok).toBe(false)
+    expect(result.kind).toBe('schema_invalid')
+    expect(result.message).toMatch(/outer\.rows\.0\.name/)
+    expect(result.zodIssues?.[0]?.path.join('.')).toBe('outer.rows.0.name')
 })
 
 test('zodToJsonSchema converts representable schemas', () => {
@@ -71,23 +67,27 @@ test('zodToJsonSchema converts representable schemas', () => {
         count: z.number(),
     })
     const converted = zodToJsonSchema(schema)
-    assert.equal(converted.ok, true)
-    assert.equal(converted.schema.type, 'object')
+    expect(converted.ok).toBe(true)
+    if (converted.ok) {
+        expect((converted.schema as any).type).toBe('object')
+    }
 })
 
 test('resolveResponseFormat maps schema to json_schema format', () => {
     const schema = z.object({value: z.string()})
     const format = resolveResponseFormat(schema, 'my_schema')
-    assert.equal(format.type, 'json_schema')
-    assert.equal(format.name, 'my_schema')
+    expect(typeof format === 'object' && format.type).toBe('json_schema')
+    if (typeof format === 'object') {
+        expect(format.name).toBe('my_schema')
+    }
 })
 
 test('OpenAI, Google, and Ollama format payloads and normalize URLs correctly', async () => {
     const originalFetch = globalThis.fetch
-    const calls = []
+    const calls: Array<{url: string; body: any}> = []
 
     globalThis.fetch = async (url, init) => {
-        const body = JSON.parse(String(init.body))
+        const body = JSON.parse(String(init?.body))
         calls.push({url: String(url), body})
         if (String(url).includes('openai')) {
             return new Response(JSON.stringify({
@@ -104,7 +104,7 @@ test('OpenAI, Google, and Ollama format payloads and normalize URLs correctly', 
 
     try {
         const format = {
-            type: 'json_schema',
+            type: 'json_schema' as const,
             name: 'test',
             schema: {type: 'object', properties: {value: {type: 'string'}}},
         }
@@ -129,12 +129,12 @@ test('OpenAI, Google, and Ollama format payloads and normalize URLs correctly', 
             format,
         })
 
-        assert.equal(calls[0].url, 'https://api.openai.com/v1/chat/completions')
-        assert.equal(calls[0].body.response_format.type, 'json_schema')
-        assert.equal(calls[1].url.includes('models/gemini-flash:generateContent'), true)
-        assert.equal(calls[1].body.generationConfig.responseMimeType, 'application/json')
-        assert.equal(calls[2].url, 'http://localhost:11434/api/chat')
-        assert.deepEqual(calls[2].body.format, format.schema)
+        expect(calls[0]?.url).toBe('https://api.openai.com/v1/chat/completions')
+        expect(calls[0]?.body.response_format.type).toBe('json_schema')
+        expect(calls[1]?.url.includes('models/gemini-flash:generateContent')).toBe(true)
+        expect(calls[1]?.body.generationConfig.responseMimeType).toBe('application/json')
+        expect(calls[2]?.url).toBe('http://localhost:11434/api/chat')
+        expect(calls[2]?.body.format).toEqual(format.schema)
     } finally {
         globalThis.fetch = originalFetch
     }
@@ -163,7 +163,7 @@ test('Asker.ask performs bounded corrective retry when validation fails', async 
         maxRetries: 2,
     })
 
-    assert.equal(result.ok, true)
-    assert.deepEqual(result.data, {count: 42})
-    assert.equal(callCount, 2)
+    expect(result.ok).toBe(true)
+    expect(result.data).toEqual({count: 42})
+    expect(callCount).toBe(2)
 })

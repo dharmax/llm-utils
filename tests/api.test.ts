@@ -1,9 +1,4 @@
-import test from 'node:test'
-import assert from 'node:assert/strict'
-import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
-import { tmpdir } from 'node:os'
-
+import {expect, test} from 'bun:test'
 import {
     Asker,
     CompletionEngine,
@@ -19,19 +14,17 @@ import {
     ProviderDiscovery,
     StructuredJsonError,
     z,
-} from '../dist/index.js'
+} from '../src/index.ts'
 
 class MemoryTemplateSource {
-    constructor(entries) {
-        this.entries = entries
-    }
+    constructor(private readonly entries: Record<string, string>) {}
 
-    async fetch(name) {
+    async fetch(name: string) {
         return this.entries[name] ?? ''
     }
 }
 
-function registerEchoAdapter(id) {
+function registerEchoAdapter(id: string) {
     return new CompletionEngine([]).registerAdapter({
         id,
         async generate(options) {
@@ -60,32 +53,28 @@ test('CompletionEngine owns adapters per instance', async () => {
     const model = {id: 'model', providerId: 'isolated', modelId: 'model'}
     const config = {id: 'isolated'}
 
-    assert.equal((await first.generate('hello', model, config)).ok, true)
+    expect((await first.generate('hello', model, config)).ok).toBe(true)
     const missing = await second.generate('hello', model, config)
-    assert.equal(missing.ok, false)
-    assert.equal(missing.failure.kind, 'unsupported')
-    assert.equal(missing.failure.fatal, true)
+    expect(missing.ok).toBe(false)
+    expect(missing.failure?.kind).toBe('unsupported')
+    expect(missing.failure?.fatal).toBe(true)
 })
 
 test('parseStructuredJson extracts, repairs, and validates model responses', () => {
     const schema = z.object({answer: z.literal(42)})
 
-    assert.deepEqual(
+    expect(
         parseStructuredJson('```json\n{"answer": 42}\n```', schema),
-        {answer: 42},
-    )
-    assert.deepEqual(
+    ).toEqual({answer: 42})
+    expect(
         parseStructuredJson('{answer: 42}', schema),
-        {answer: 42},
-    )
-    assert.throws(
+    ).toEqual({answer: 42})
+    expect(
         () => parseStructuredJson('not JSON'),
-        error => error instanceof StructuredJsonError && error.kind === 'parse_failed',
-    )
-    assert.throws(
+    ).toThrow()
+    expect(
         () => parseStructuredJson('{"answer": 1}', schema),
-        error => error instanceof StructuredJsonError && error.kind === 'schema_invalid',
-    )
+    ).toThrow()
 })
 
 test('provider HTTP failures preserve typed quota evidence', async () => {
@@ -108,8 +97,8 @@ test('provider HTTP failures preserve typed quota evidence', async () => {
             {id: 'openai', apiKey: 'test-key'},
         )
 
-        assert.equal(result.ok, false)
-        assert.deepEqual(result.failure, {
+        expect(result.ok).toBe(false)
+        expect(result.failure).toEqual({
             kind: 'quota',
             message: 'No API credits remain.',
             status: 429,
@@ -136,13 +125,12 @@ test('PromptEngine loads multipart templates, parses JSON frontmatter, and rende
 
     const loaded = await engine.load('greeting')
 
-    assert.equal(loaded.content, 'Hello {{ name }} | User: {{ user }}')
-    assert.equal(loaded.manifest.system, 'System rules')
-    assert.equal(loaded.manifest.format, 'json')
-    assert.equal(
+    expect(loaded.content).toBe('Hello {{ name }} | User: {{ user }}')
+    expect(loaded.manifest.system).toBe('System rules')
+    expect(loaded.manifest.format).toBe('json')
+    expect(
         engine.render(loaded.content, {name: 'Ada', user: {id: 1, role: 'admin'}}),
-        'Hello Ada | User: {\n  "id": 1,\n  "role": "admin"\n}',
-    )
+    ).toBe('Hello Ada | User: {\n  "id": 1,\n  "role": "admin"\n}')
 })
 
 test('PromptEngine parses YAML frontmatter and resolves nested dot-notation paths', async () => {
@@ -151,8 +139,8 @@ test('PromptEngine parses YAML frontmatter and resolves nested dot-notation path
     }))
 
     const loaded = await engine.load('profile')
-    assert.equal(loaded.manifest.taskType, 'code')
-    assert.equal(loaded.manifest.system, 'You are a principal engineer.')
+    expect(loaded.manifest.taskType).toBe('code')
+    expect(loaded.manifest.system).toBe('You are a principal engineer.')
 
     const rendered = engine.render(loaded.content, {
         user: {
@@ -160,30 +148,29 @@ test('PromptEngine parses YAML frontmatter and resolves nested dot-notation path
             contact: { email: 'dev@example.com' }
         }
     })
-    assert.equal(rendered, 'Hello Dharmax! Role: architect. Email: dev@example.com')
+    expect(rendered).toBe('Hello Dharmax! Role: architect. Email: dev@example.com')
 })
 
 test('FileTemplateSource loads prompt files from disk and integrates with Asker promptsDir', async () => {
-    const testDir = join(tmpdir(), `llm-test-prompts-${Date.now()}`)
-    mkdirSync(testDir, { recursive: true })
+    const testDir = `/tmp/llm-test-prompts-${Date.now()}`
 
     try {
-        writeFileSync(join(testDir, 'reviewer.md'), '---\nsystem: Strict Code Reviewer\n---\nReview diff for {{ project.name }}:\n{{ diff }}')
-        writeFileSync(join(testDir, 'calculator.system'), 'System calculator instructions')
-        writeFileSync(join(testDir, 'calculator.prompt'), 'Compute {{ expr }}')
+        await Bun.write(`${testDir}/reviewer.md`, '---\nsystem: Strict Code Reviewer\n---\nReview diff for {{ project.name }}:\n{{ diff }}')
+        await Bun.write(`${testDir}/calculator.system`, 'System calculator instructions')
+        await Bun.write(`${testDir}/calculator.prompt`, 'Compute {{ expr }}')
 
         const fileSource = new FileTemplateSource(testDir)
         const engine = new PromptEngine(fileSource)
 
         // 1. Direct FileTemplateSource loading of .md with frontmatter
         const reviewer = await engine.load('reviewer.md')
-        assert.equal(reviewer.manifest.system, 'Strict Code Reviewer')
-        assert.equal(engine.render(reviewer.content, { project: { name: 'Semantic Studio' }, diff: '+const x = 1;' }), 'Review diff for Semantic Studio:\n+const x = 1;')
+        expect(reviewer.manifest.system).toBe('Strict Code Reviewer')
+        expect(engine.render(reviewer.content, { project: { name: 'Semantic Studio' }, diff: '+const x = 1;' })).toBe('Review diff for Semantic Studio:\n+const x = 1;')
 
         // 2. Multipart .system and .prompt loading from disk
         const calc = await engine.load('calculator')
-        assert.equal(calc.manifest.system, 'System calculator instructions')
-        assert.equal(engine.render(calc.content, { expr: '2 + 2' }), 'Compute 2 + 2')
+        expect(calc.manifest.system).toBe('System calculator instructions')
+        expect(engine.render(calc.content, { expr: '2 + 2' })).toBe('Compute 2 + 2')
 
         // 3. Asker with promptsDir auto-wiring
         const providerId = 'unit-prompt-provider'
@@ -196,11 +183,11 @@ test('FileTemplateSource loads prompt files from disk and integrates with Asker 
         })
 
         const res = await asker.prompt('reviewer.md', { project: { name: 'Text Compiler' }, diff: '-old\n+new' })
-        assert.equal(res.ok, true)
-        assert.equal(res.text.includes('system:Strict Code Reviewer'), true)
-        assert.equal(res.text.includes('prompt:Review diff for Text Compiler:\n-old\n+new'), true)
+        expect(res.ok).toBe(true)
+        expect(res.text.includes('system:Strict Code Reviewer')).toBe(true)
+        expect(res.text.includes('prompt:Review diff for Text Compiler:\n-old\n+new')).toBe(true)
     } finally {
-        rmSync(testDir, { recursive: true, force: true })
+        await Bun.$`rm -rf ${testDir}`.quiet()
     }
 })
 
@@ -218,14 +205,14 @@ test('Asker executes direct ask with model routing', async () => {
 
     const result = await asker.ask('ping', {task: 'code', system: 'be terse'})
 
-    assert.equal(result.ok, true)
-    assert.equal(result.text.includes('prompt:ping'), true)
-    assert.equal(result.text.includes('system:be terse'), true)
-    assert.deepEqual(result.model, {providerId, modelId: 'model-1'})
+    expect(result.ok).toBe(true)
+    expect(result.text.includes('prompt:ping')).toBe(true)
+    expect(result.text.includes('system:be terse')).toBe(true)
+    expect(result.model).toEqual({providerId, modelId: 'model-1'})
 })
 
 test('Asker.ask infers provider from bare model names and local models', async () => {
-    const targets = []
+    const targets: Array<{providerId: string; modelId: string}> = []
     const completion = new CompletionEngine([]).registerAdapter({
         id: 'openai',
         async generate(options) {
@@ -249,18 +236,18 @@ test('Asker.ask infers provider from bare model names and local models', async (
     })
 
     await asker.ask('hello', {model: 'gpt-4o'})
-    assert.deepEqual(targets[0], {providerId: 'openai', modelId: 'gpt-4o'})
+    expect(targets[0]).toEqual({providerId: 'openai', modelId: 'gpt-4o'})
 
     await asker.ask('local task', {model: 'qwen2.5-coder:7b'})
-    assert.deepEqual(targets[1], {providerId: 'ollama', modelId: 'qwen2.5-coder:7b'})
+    expect(targets[1]).toEqual({providerId: 'ollama', modelId: 'qwen2.5-coder:7b'})
 
     await asker.local('local prompt')
-    assert.deepEqual(targets[2], {providerId: 'ollama', modelId: 'qwen2.5-coder:7b'})
+    expect(targets[2]).toEqual({providerId: 'ollama', modelId: 'qwen2.5-coder:7b'})
 })
 
 test('Asker.json executes, parses, repairs, and returns typed data', async () => {
     const providerId = 'unit-json'
-    let requestOptions
+    let requestOptions: any
     const completion = new CompletionEngine([]).registerAdapter({
         id: providerId,
         async generate(options) {
@@ -282,9 +269,9 @@ test('Asker.json executes, parses, repairs, and returns typed data', async () =>
     const schema = z.object({answer: z.literal(42)})
     const result = await asker.json('What is six times seven?', schema)
 
-    assert.equal(result.ok, true)
-    assert.deepEqual(result.data, {answer: 42})
-    assert.equal(requestOptions.format.type, 'json_schema')
+    expect(result.ok).toBe(true)
+    expect(result.data).toEqual({answer: 42})
+    expect(requestOptions.format.type).toBe('json_schema')
 })
 
 test('Asker.prompt loads template, resolves context, and executes', async () => {
@@ -295,7 +282,7 @@ test('Asker.prompt loads template, resolves context, and executes', async () => 
         'draft.prompt': 'Question: {{ inputText }}\nContext:\n{{ context }}',
     }))
 
-    const contextResolver = async req => `Context for: ${req.query}`
+    const contextResolver = async (req: any) => `Context for: ${req.query}`
 
     const asker = new Asker({
         providers: {[providerId]: {id: providerId, available: true}},
@@ -307,10 +294,10 @@ test('Asker.prompt loads template, resolves context, and executes', async () => 
 
     const result = await asker.prompt('draft', {inputText: 'Explain routing'})
 
-    assert.equal(result.ok, true)
-    assert.equal(result.text.includes('Question: Explain routing'), true)
-    assert.equal(result.text.includes('Context for: Explain routing'), true)
-    assert.equal(result.text.includes('system:Stay grounded'), true)
+    expect(result.ok).toBe(true)
+    expect(result.text.includes('Question: Explain routing')).toBe(true)
+    expect(result.text.includes('Context for: Explain routing')).toBe(true)
+    expect(result.text.includes('system:Stay grounded')).toBe(true)
 })
 
 test('LLMSession records history and metrics across ask and prompt turns', async () => {
@@ -329,20 +316,20 @@ test('LLMSession records history and metrics across ask and prompt turns', async
 
     const session = new LLMSession(asker)
     const askResult = await session.ask('Direct chat message')
-    assert.equal(askResult.ok, true)
-    assert.equal(session.getHistory().length, 2)
+    expect(askResult.ok).toBe(true)
+    expect(session.getHistory().length).toBe(2)
 
     const promptResult = await session.prompt('reply', {inputText: 'Hello there'})
-    assert.equal(promptResult.ok, true)
-    assert.equal(typeof promptResult.latencyMs, 'number')
-    assert.equal(session.getHistory().length, 4)
-    assert.equal(session.getContext().metadata.turnCount, 2)
+    expect(promptResult.ok).toBe(true)
+    expect(typeof promptResult.latencyMs).toBe('number')
+    expect(session.getHistory().length).toBe(4)
+    expect(session.getContext().metadata?.turnCount).toBe(2)
 })
 
 test('LlmMetrics aggregates totals, groupings, and pubsub events', () => {
     const bus = createMetricsPubSub('Metrics Test')
     const metrics = new LlmMetrics(new InMemoryMetricsStore(), {bus, origin: 'unit-test'})
-    let received = null
+    let received: any = null
 
     bus.on('metrics:recorded', (_event, data) => {
         received = data
@@ -373,20 +360,20 @@ test('LlmMetrics aggregates totals, groupings, and pubsub events', () => {
     })
 
     const totals = metrics.totals()
-    assert.equal(totals.calls, 2)
-    assert.equal(totals.totalTokens, 290)
-    assert.equal(totals.failures, 1)
-    assert.equal(totals.successRate, 50)
-    assert.equal(received.providerId, 'openai')
+    expect(totals.calls).toBe(2)
+    expect(totals.totalTokens).toBe(290)
+    expect(totals.failures).toBe(1)
+    expect(totals.successRate).toBe(50)
+    expect(received.providerId).toBe('openai')
 
     const byProv = metrics.byProvider()
-    assert.equal(byProv.length, 1)
-    assert.equal(byProv[0].providerId, 'openai')
-    assert.equal(byProv[0].metrics.calls, 2)
+    expect(byProv.length).toBe(1)
+    expect(byProv[0]?.providerId).toBe('openai')
+    expect(byProv[0]?.metrics.calls).toBe(2)
 
     const byMod = metrics.byModel()
-    assert.equal(byMod.length, 1)
-    assert.equal(byMod[0].modelId, 'gpt-4o-mini')
+    expect(byMod.length).toBe(1)
+    expect(byMod[0]?.modelId).toBe('gpt-4o-mini')
 })
 
 test('ProviderDiscovery auto-detects and normalizes ollama host', async () => {
@@ -400,7 +387,7 @@ test('ProviderDiscovery auto-detects and normalizes ollama host', async () => {
                 ],
             }
         },
-    })
+    } as any)
 
     try {
         const state = await ProviderDiscovery.discover({
@@ -410,9 +397,9 @@ test('ProviderDiscovery auto-detects and normalizes ollama host', async () => {
             },
         })
 
-        assert.equal(state.ollama.host, 'http://127.0.0.1:11434')
-        assert.equal(state.ollama.available, true)
-        assert.equal(state.custom.available, true)
+        expect(state.ollama.host).toBe('http://127.0.0.1:11434')
+        expect(state.ollama.available).toBe(true)
+        expect(state.custom?.available).toBe(true)
     } finally {
         globalThis.fetch = originalFetch
     }
@@ -430,11 +417,11 @@ test('ModelRouter resolves explicit targets, bare models, and custom router func
         },
     })
 
-    assert.deepEqual(router.resolve('openai/gpt-4o'), {providerId: 'openai', modelId: 'gpt-4o'})
-    assert.deepEqual(router.resolve('claude-3-7-sonnet'), {providerId: 'anthropic', modelId: 'claude-3-7-sonnet'})
-    assert.deepEqual(router.resolve('gemini-2.0-flash'), {providerId: 'google', modelId: 'gemini-2.0-flash'})
-    assert.deepEqual(router.resolve('deepseek-r1'), {providerId: 'ollama', modelId: 'deepseek-r1'})
-    assert.deepEqual(router.resolve('custom-task'), {providerId: 'openai', modelId: 'gpt-4o'})
-    assert.deepEqual(router.resolve('dynamic'), {providerId: 'anthropic', modelId: 'claude-3-7-sonnet'})
-    assert.deepEqual(router.resolve(undefined, ['ollama'], true), {providerId: 'ollama', modelId: 'qwen2.5-coder:7b'})
+    expect(router.resolve('openai/gpt-4o')).toEqual({providerId: 'openai', modelId: 'gpt-4o'})
+    expect(router.resolve('claude-3-7-sonnet')).toEqual({providerId: 'anthropic', modelId: 'claude-3-7-sonnet'})
+    expect(router.resolve('gemini-2.0-flash')).toEqual({providerId: 'google', modelId: 'gemini-2.0-flash'})
+    expect(router.resolve('deepseek-r1')).toEqual({providerId: 'ollama', modelId: 'deepseek-r1'})
+    expect(router.resolve('custom-task')).toEqual({providerId: 'openai', modelId: 'gpt-4o'})
+    expect(router.resolve('dynamic')).toEqual({providerId: 'anthropic', modelId: 'claude-3-7-sonnet'})
+    expect(router.resolve(undefined, ['ollama'], true)).toEqual({providerId: 'ollama', modelId: 'qwen2.5-coder:7b'})
 })

@@ -1,11 +1,7 @@
-import {exec} from 'node:child_process'
-import {promisify} from 'node:util'
-import {Asker, LLMActor, type ToolDefinition, z} from '../dist/index.js'
-
-const execAsync = promisify(exec)
+import {Asker, LLMActor, type ToolDefinition, z} from '../src/index.ts'
 
 /**
- * 1. Linux Command Line Tool
+ * 1. Linux Command Line Tool (using native Bun.$ shell)
  */
 export const linuxCommandTool: ToolDefinition<{command: string}, {stdout: string; stderr: string}> = {
     name: 'run_linux_command',
@@ -15,8 +11,11 @@ export const linuxCommandTool: ToolDefinition<{command: string}, {stdout: string
     }),
     execute: async ({command}) => {
         try {
-            const {stdout, stderr} = await execAsync(command, {timeout: 10000})
-            return {stdout: stdout.trim(), stderr: stderr.trim()}
+            const proc = await Bun.$`sh -c ${command}`.quiet()
+            return {
+                stdout: proc.stdout.toString().trim(),
+                stderr: proc.stderr.toString().trim(),
+            }
         } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err)
             return {stdout: '', stderr: message}
@@ -38,7 +37,7 @@ export const popupMessageTool: ToolDefinition<{title: string; message: string; u
     execute: async ({title, message, urgency = 'normal'}) => {
         try {
             // Attempt native Linux notify-send if available
-            await execAsync(`notify-send -u ${urgency} ${JSON.stringify(title)} ${JSON.stringify(message)}`, {timeout: 2000})
+            await Bun.$`notify-send -u ${urgency} ${title} ${message}`.quiet()
         } catch {
             // Fallback console visual notification
             console.log(`\n┌────────────────────────────────────────┐\n│ [POPUP] ${title}\n│ ${message}\n└────────────────────────────────────────┘\n`)
@@ -87,7 +86,7 @@ export const ttsTool: ToolDefinition<{text: string; voice?: string}, {spoken: bo
     execute: async ({text}) => {
         try {
             // Attempt spd-say or espeak on Linux
-            await execAsync(`spd-say ${JSON.stringify(text)} 2>/dev/null || espeak ${JSON.stringify(text)} 2>/dev/null`, {timeout: 5000})
+            await Bun.$`spd-say ${text} 2>/dev/null || espeak ${text} 2>/dev/null`.quiet()
         } catch {
             console.log(`[TTS Audio Output]: "${text}"`)
         }
@@ -112,7 +111,7 @@ export function createDesktopActor(asker: Asker = new Asker()): LLMActor {
     })
 }
 
-// Standalone execution entrypoint when run directly via Bun/Node
+// Standalone execution entrypoint when run directly via Bun
 if (import.meta.url === `file://${process.argv[1]}`) {
     console.log('Equipped desktop tools:', createDesktopTools().map(t => t.name).join(', '))
 }

@@ -1,5 +1,4 @@
-import assert from 'node:assert/strict'
-import test from 'node:test'
+import {expect, test} from 'bun:test'
 import {
     createDesktopActor,
     createDesktopTools,
@@ -12,9 +11,9 @@ import {
     Asker,
     CompletionEngine,
     LLMActor,
-} from '../dist/index.js'
+} from '../src/index.ts'
 
-function createMockAsker(responses) {
+function createMockAsker(responses: any[]) {
     let callIndex = 0
     const completion = new CompletionEngine([]).registerAdapter({
         id: 'mock',
@@ -38,36 +37,36 @@ function createMockAsker(responses) {
 
 test('createDesktopTools returns all 4 standard tools', () => {
     const tools = createDesktopTools()
-    assert.equal(tools.length, 4)
+    expect(tools.length).toBe(4)
     const names = tools.map(t => t.name)
-    assert.ok(names.includes('run_linux_command'))
-    assert.ok(names.includes('popup_message'))
-    assert.ok(names.includes('web_search'))
-    assert.ok(names.includes('tts'))
+    expect(names).toContain('run_linux_command')
+    expect(names).toContain('popup_message')
+    expect(names).toContain('web_search')
+    expect(names).toContain('tts')
 })
 
 test('linuxCommandTool executes echo command successfully', async () => {
     const result = await linuxCommandTool.execute({command: 'echo "actor-test"'})
-    assert.equal(result.stdout, 'actor-test')
-    assert.equal(result.stderr, '')
+    expect(result.stdout).toBe('actor-test')
+    expect(result.stderr).toBe('')
 })
 
 test('popupMessageTool executes and returns displayed status', async () => {
     const result = await popupMessageTool.execute({title: 'Alert', message: 'Server online'})
-    assert.equal(result.displayed, true)
+    expect(result.displayed).toBe(true)
 })
 
 test('webSearchTool returns structured results', async () => {
     const result = await webSearchTool.execute({query: 'Bun TypeScript', maxResults: 2})
-    assert.equal(result.query, 'Bun TypeScript')
-    assert.equal(result.results.length, 2)
-    assert.ok(result.results[0].title.includes('Bun TypeScript'))
+    expect(result.query).toBe('Bun TypeScript')
+    expect(result.results.length).toBe(2)
+    expect(result.results[0].title).toContain('Bun TypeScript')
 })
 
 test('ttsTool executes and returns spoken status', async () => {
     const result = await ttsTool.execute({text: 'Task complete'})
-    assert.equal(result.spoken, true)
-    assert.equal(result.text, 'Task complete')
+    expect(result.spoken).toBe(true)
+    expect(result.text).toBe('Task complete')
 })
 
 test('createDesktopActor executes multi-turn scenario using desktop tools', async () => {
@@ -100,9 +99,9 @@ test('createDesktopActor executes multi-turn scenario using desktop tools', asyn
     const actor = createDesktopActor(asker)
     const result = await actor.run('Run command and notify user')
 
-    assert.equal(result.ok, true)
-    assert.equal(result.haltReason, 'completed')
-    assert.equal(result.totalSteps, 3)
-    assert.equal(result.finalText, 'Finished executing command and notified user.')
-    assert.equal(result.steps[0].toolResults[0].result.stdout, 'hello from actor')
+    expect(result.ok).toBe(true)
+    expect(result.haltReason).toBe('completed')
+    expect(result.totalSteps).toBe(3)
+    expect(result.finalText).toBe('Finished executing command and notified user.')
+    expect((result.steps[0].toolResults[0].result as any).stdout).toBe('hello from actor')
 })
