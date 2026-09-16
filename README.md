@@ -37,6 +37,7 @@ bun add @dharmax/llm-utils zod
 | :--- | :--- | :--- |
 | **`Asker`** | `ask(prompt, opts)`<br>`json(prompt, schema, opts)`<br>`local(prompt, opts)`<br>`prompt(name, vars, opts)`<br>`promptJson(name, vars, schema, opts)` | Unified LLM client with provider routing, schema validation, and template support. |
 | **`LLMActor`** | `run(goal, opts)`<br>`step(goal, history, ctx, opts)`<br>`registerTool(tool)` | Autonomous tool execution loop (Think-Act-Observe) with error boundaries and budget control. |
+| **`LLMPipeline`** | `run(goal, opts)`<br>`preprocess(goal)`<br>`plan(intent)` | Native multi-phase orchestrator (Preprocess → Plan → Scoped Act → Verify). |
 | **`LLMSession`** | `ask(prompt, opts)`<br>`prompt(name, vars, opts)`<br>`clear()` | Stateful multi-turn conversation wrapper with sliding history. |
 | **`PromptEngine`** | `load(name)`<br>`render(template, vars)` | Multipart prompt template engine with YAML/JSON frontmatter and dot-notation paths. |
 | **`FileTemplateSource`** | `load(name)` | Filesystem template loader for `.prompt`, `.md`, and `.txt` files. |
@@ -298,6 +299,67 @@ During interactive sessions, the REPL supports slash commands:
 * `/models` — Inspect auto-detected local Ollama models
 * `/clear` — Clear terminal screen
 * `exit` — Exit REPL
+
+---
+
+## Multi-Phase Agent Pipelines: `LLMPipeline`
+
+When prompts involve multiple dependent tasks, complex workflows, or strict constraints, monolithic ReAct loops can suffer from attention dilution on 7B models. `LLMPipeline` breaks the problem into **4 discrete, verified phases**:
+
+```
+User Prompt ──→ 1. Preprocess ──→ 2. Plan ──→ 3. Scoped Execution ──→ 4. Verify & Synthesize
+```
+
+1. **Phase 1: Preprocess (Intent & Constraints)**: Clarifies goal, identifies constraints, and **prunes the tool catalog** to only the tools relevant for this goal.
+2. **Phase 2: Plan (Decomposition & Dependencies)**: Decomposes the goal into an ordered checklist of sub-tasks with explicit `dependsOn` relationships.
+3. **Phase 3: Scoped Execution**: Runs each step in an isolated `LLMActor` turn, injecting prerequisite outputs into the next step's memory context.
+4. **Phase 4: Synthesis & Verification**: Verifies all constraints were satisfied and produces the final answer (or validated typed Zod data).
+
+### Basic Usage
+
+```ts
+import { Asker, LLMPipeline, z } from '@dharmax/llm-utils'
+
+const asker = new Asker()
+const pipeline = new LLMPipeline(asker, {
+    tools: [
+        {
+            name: 'get_client_status',
+            description: 'Returns client subscription tier and credits',
+            parameters: z.object({ clientId: z.string() }),
+            execute: ({ clientId }) => ({ clientId, tier: 'enterprise', credits: 450 }),
+        },
+        {
+            name: 'calculate_discount',
+            description: 'Calculates renewal discount based on tier and credits',
+            parameters: z.object({ credits: z.number() }),
+            execute: ({ credits }) => ({ discountPercent: credits > 400 ? 20 : 10 }),
+        },
+    ],
+    onPhaseChange: (phase, data) => console.log(`[Phase: ${phase}]`),
+})
+
+const result = await pipeline.run(
+    'Check status for client "c_123" with get_client_status, then calculate their discount using calculate_discount. State both tier and discount.'
+)
+
+if (result.ok) {
+    console.log(result.finalText)
+    console.log('Execution Plan:', result.plan.steps)
+}
+```
+
+### Pluggable Architecture (Service Adapter Pattern)
+
+`LLMPipeline` accepts optional custom adapters for preprocessing and planning:
+
+```ts
+const pipeline = new LLMPipeline(asker, {
+    tools,
+    preprocessor: myCustomPreprocessor, // implements IntentPreprocessorAdapter
+    planner: myCustomPlanner,           // implements TaskPlannerAdapter
+})
+```
 
 ---
 

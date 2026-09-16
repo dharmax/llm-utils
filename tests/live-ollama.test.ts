@@ -3,6 +3,7 @@ import {
     Asker,
     type ContextResolver,
     LLMActor,
+    LLMPipeline,
     PromptEngine,
     ProviderDiscovery,
     z,
@@ -113,3 +114,159 @@ test('Live Ollama: LLMActor executes end-to-end RAG + autonomous tool augmentati
     expect(result.finalText).toContain('AUTH_TOKEN_SEC_7788')
     expect(result.finalText).toContain('19')
 }, 60000)
+
+test('Live Ollama: LLMActor chains multi-tool outputs with data dependencies', async () => {
+    if (!isOllamaUp) {
+        console.warn(`Skipping live Ollama test: Ollama not reachable at ${ollamaHost}`)
+        return
+    }
+
+    const asker = new Asker({
+        providers: {
+            ollama: {id: 'ollama', host: ollamaHost, available: true},
+        },
+        defaultModel: `ollama/${testModel}`,
+    })
+
+    const tools = [
+        {
+            name: 'get_user_scores',
+            description: 'Returns list of test scores for a user',
+            parameters: z.object({
+                username: z.string().describe('The user name'),
+            }),
+            execute: ({username}: {username: string}) => {
+                return {username, scores: [80, 90, 70]}
+            },
+        },
+        {
+            name: 'eval_math',
+            description: 'Calculates arithmetic expressions. Pass the mathematical formula as a string, e.g. "(80 + 90 + 70) / 3".',
+            parameters: z.object({
+                expression: z.string().describe('Arithmetic string formula to calculate, e.g. "(80 + 90 + 70) / 3"'),
+            }),
+            execute: ({expression}: {expression: string}) => {
+                const sanitized = expression.replace(/[^0-9+\-*/().%\s]/g, '')
+                const fn = new Function(`return (${sanitized});`)
+                return {result: fn()}
+            },
+        },
+    ]
+
+    const actor = new LLMActor(asker, {
+        maxSteps: 5,
+        tools,
+    })
+
+    const goal = 'Get the scores for user "alice" using get_user_scores, then calculate the average score using eval_math. State the average.'
+    const result = await actor.run(goal)
+
+    expect(result.ok).toBe(true)
+    expect(result.haltReason).toBe('completed')
+    expect(result.finalText).toContain('80')
+}, 60000)
+
+test('Live Ollama: LLMActor recovers from tool errors and executes conditional fallback', async () => {
+    if (!isOllamaUp) {
+        console.warn(`Skipping live Ollama test: Ollama not reachable at ${ollamaHost}`)
+        return
+    }
+
+    const asker = new Asker({
+        providers: {
+            ollama: {id: 'ollama', host: ollamaHost, available: true},
+        },
+        defaultModel: `ollama/${testModel}`,
+    })
+
+    const tools = [
+        {
+            name: 'read_config_file',
+            description: 'Reads a configuration file from disk',
+            parameters: z.object({
+                filename: z.string().describe('File name to read'),
+            }),
+            execute: async ({filename}: {filename: string}) => {
+                if (filename.includes('backup_config')) {
+                    throw new Error(`File "${filename}" not found: 404 No such file`)
+                }
+                if (filename.includes('primary_config')) {
+                    return {env: 'production', port: 8080}
+                }
+                return {unknown: true}
+            },
+        },
+    ]
+
+    const actor = new LLMActor(asker, {
+        maxSteps: 5,
+        tools,
+    })
+
+    const goal = 'Try to read "backup_config.json" using read_config_file. If that fails or does not exist, read "primary_config.json" instead and report the port number.'
+    const result = await actor.run(goal)
+
+    expect(result.ok).toBe(true)
+    expect(result.haltReason).toBe('completed')
+    expect(result.finalText).toContain('8080')
+}, 60000)
+
+test('Live Ollama: LLMPipeline executes full multi-phase lifecycle end-to-end', async () => {
+    if (!isOllamaUp) {
+        console.warn(`Skipping live Ollama test: Ollama not reachable at ${ollamaHost}`)
+        return
+    }
+
+    const asker = new Asker({
+        providers: {
+            ollama: {id: 'ollama', host: ollamaHost, available: true},
+        },
+        defaultModel: `ollama/${testModel}`,
+    })
+
+    const tools = [
+        {
+            name: 'get_client_status',
+            description: 'Returns client subscription and balance info',
+            parameters: z.object({
+                clientId: z.string().describe('Client ID'),
+            }),
+            execute: ({clientId}: {clientId: string}) => {
+                return {clientId, tier: 'enterprise', credits: 450}
+            },
+        },
+        {
+            name: 'calculate_discount',
+            description: 'Calculates renewal discount based on tier and credits',
+            parameters: z.object({
+                credits: z.number().describe('Current credit balance'),
+            }),
+            execute: ({credits}: {credits: number}) => {
+                return {discountPercent: credits > 400 ? 20 : 10}
+            },
+        },
+    ]
+
+    const phaseEvents: string[] = []
+    const pipeline = new LLMPipeline(asker, {
+        tools,
+        maxStepsPerPhase: 3,
+        onPhaseChange: (phase) => {
+            phaseEvents.push(phase)
+        },
+    })
+
+    const goal = 'Check status for client "c_123" with get_client_status, then calculate their discount using calculate_discount. State both tier and discount.'
+    const result = await pipeline.run(goal)
+
+    expect(result.ok).toBe(true)
+    expect(result.intent.normalizedGoal).toBeDefined()
+    expect(result.plan.steps.length).toBeGreaterThanOrEqual(1)
+    expect(result.finalText.toLowerCase()).toContain('enterprise')
+    expect(result.finalText).toContain('20')
+    expect(phaseEvents).toContain('preprocess')
+    expect(phaseEvents).toContain('plan')
+    expect(phaseEvents).toContain('execute')
+    expect(phaseEvents).toContain('verify')
+}, 90000)
+

@@ -99,10 +99,21 @@ export function normalizeToolParameters(params: Record<string, unknown>, schema:
                 normalized[key] = inner.value
             } else if (key in inner) {
                 normalized[key] = inner[key]
+            } else if ('average' in inner && typeof inner.average === 'string') {
+                normalized[key] = inner.average
+            } else if ('formula' in inner && typeof inner.formula === 'string') {
+                normalized[key] = inner.formula
+            } else if ('expr' in inner && typeof inner.expr === 'string') {
+                normalized[key] = inner.expr
+            } else if ('expression' in inner && typeof inner.expression === 'string') {
+                normalized[key] = inner.expression
             } else {
                 const values = Object.values(inner)
                 const keys = Object.keys(inner)
-                if (values.length === 1) {
+                const formulaVal = values.find(v => typeof v === 'string' && /[+\-*/()]/.test(v))
+                if (typeof formulaVal === 'string') {
+                    normalized[key] = formulaVal
+                } else if (values.length === 1) {
                     const firstVal = values[0]
                     if (typeof firstVal === 'string' || typeof firstVal === 'number' || typeof firstVal === 'boolean') {
                         normalized[key] = firstVal
@@ -339,10 +350,17 @@ export class LLMActor {
 
                 if (options.schema && finalText) {
                     const parsed = parseStructuredJsonResult(finalText, options.schema)
-                    if (parsed.ok)
+                    if (parsed.ok) {
                         output = parsed.data
-                    else
-                        output = undefined
+                    } else {
+                        const repair = await this.asker.json(
+                            `Extract and format the required structured JSON based on the goal and observations.\n\nGoal: ${effectiveGoal}\n\nObservations/Answer:\n${finalText}`,
+                            options.schema,
+                            options.askOptions,
+                        )
+                        if (repair.ok && repair.data)
+                            output = repair.data
+                    }
                 }
 
                 return {
