@@ -1,4 +1,4 @@
-import type {ModelTarget, ProviderId} from './types.mjs'
+import type {ModelTarget, ProviderId} from './types.ts'
 
 export interface TaskRouteMap {
     [task: string]: string | ModelTarget
@@ -7,10 +7,10 @@ export interface TaskRouteMap {
 export type CustomRouterFn = (task: string, availableProviders: string[]) => ModelTarget | string | undefined
 
 export interface ModelRouterOptions {
-    routes?: TaskRouteMap | undefined
-    router?: CustomRouterFn | undefined
-    preferLocal?: boolean | undefined
-    defaultModel?: string | ModelTarget | undefined
+    routes?: TaskRouteMap
+    router?: CustomRouterFn
+    preferLocal?: boolean
+    defaultModel?: string | ModelTarget
 }
 
 export const DEFAULT_TASK_ROUTES: TaskRouteMap = {
@@ -25,7 +25,7 @@ export const DEFAULT_TASK_ROUTES: TaskRouteMap = {
 
 export class ModelRouter {
     private readonly routes: TaskRouteMap
-    private readonly customRouter: CustomRouterFn | undefined
+    private readonly customRouter?: CustomRouterFn
     private readonly defaultModel: ModelTarget
     private readonly preferLocal: boolean
 
@@ -40,9 +40,9 @@ export class ModelRouter {
      * Resolves a task or model name to a concrete ModelTarget given available providers.
      */
     resolve(
-        targetOrTask?: string | ModelTarget | undefined,
+        targetOrTask?: string | ModelTarget,
         availableProviders: string[] = ['google', 'openai', 'anthropic', 'ollama'],
-        preferLocalOverride?: boolean | undefined,
+        preferLocalOverride?: boolean,
     ): ModelTarget {
         const useLocal = preferLocalOverride !== undefined ? preferLocalOverride : this.preferLocal
 

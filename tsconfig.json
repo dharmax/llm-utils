@@ -8,7 +8,6 @@
     "outDir": "./dist",
     "strict": true,
     "noUncheckedIndexedAccess": true,
-    "exactOptionalPropertyTypes": true,
     "noImplicitReturns": true,
     "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
@@ -25,5 +24,5 @@
     "forceConsistentCasingInFileNames": true,
     "rootDir": "src"
   },
-  "include": ["src/**/*.mts"]
+  "include": ["src/**/*.ts"]
 }

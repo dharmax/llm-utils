@@ -5,7 +5,7 @@ import type {
     ProviderAdapter,
     ResponseFormat,
     Usage,
-} from './types.mjs'
+} from './types.ts'
 
 export class OpenAIAdapter implements ProviderAdapter {
     readonly id = 'openai'
@@ -198,11 +198,11 @@ interface PostJsonOptions {
     providerId: string
     modelId: string
     url: string
-    headers?: Record<string, string> | undefined
+    headers?: Record<string, string>
     body: Record<string, unknown>
-    signal?: AbortSignal | null | undefined
-    timeoutMs?: number | undefined
-    extract: (data: unknown) => {text: string; usage?: Usage | undefined}
+    signal?: AbortSignal
+    timeoutMs?: number
+    extract: (data: unknown) => {text: string; usage?: Usage}
 }
 
 async function postJson(opts: PostJsonOptions): Promise<GenerationResult> {
@@ -341,21 +341,22 @@ function isJsonFormat(format?: ResponseFormat): boolean {
         return false
     if (format === 'json')
         return true
-    return typeof format === 'object' && (format.type === 'json' || format.type === 'json_schema');
-
+    return typeof format === 'object' && (format.type === 'json' || format.type === 'json_schema' || Boolean(format.schema))
 }
 
 function toOpenAiFormat(format?: ResponseFormat): Record<string, unknown> | undefined {
-    if (!format || format === 'text' || (typeof format === 'object' && format.type === 'text'))
+    if (!format || format === 'text')
         return undefined
-    if (format === 'json' || (typeof format === 'object' && format.type === 'json'))
+    if (typeof format === 'object' && format.type === 'text' && !format.schema)
+        return undefined
+    if (format === 'json' || (typeof format === 'object' && format.type === 'json' && !format.schema))
         return {type: 'json_object'}
-    if (typeof format === 'object' && format.type === 'json_schema') {
+    if (typeof format === 'object' && (format.type === 'json_schema' || format.schema)) {
         return {
             type: 'json_schema',
             json_schema: {
                 name: format.name ?? 'structured_response',
-                schema: format.schema,
+                schema: format.schema ?? {},
                 ...(format.strict !== undefined ? {strict: format.strict} : {}),
             },
         }

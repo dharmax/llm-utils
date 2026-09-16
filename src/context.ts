@@ -7,31 +7,31 @@ export interface ContextHistoryItem {
 
 export interface ContextRequest {
     query: string
-    taskType?: string | undefined
-    maxTokens?: number | undefined
-    maxItems?: number | undefined
-    categories?: string[] | undefined
-    history?: ContextHistoryItem[] | undefined
-    hints?: Record<string, unknown> | undefined
+    taskType?: string
+    maxTokens?: number
+    maxItems?: number
+    categories?: string[]
+    history?: ContextHistoryItem[]
+    hints?: Record<string, unknown>
     output?: {
-        mode?: 'rendered' | 'items' | 'both' | undefined
-        format?: 'markdown' | 'plain' | undefined
-    } | undefined
+        mode?: 'rendered' | 'items' | 'both'
+        format?: 'markdown' | 'plain'
+    }
 }
 
 export interface ContextItem {
     id: string
     title: string
     content: string
-    kind?: string | undefined
-    score?: number | undefined
-    source?: string | undefined
-    metadata?: Record<string, unknown> | undefined
+    kind?: string
+    score?: number
+    source?: string
+    metadata?: Record<string, unknown>
 }
 
 export interface ContextResult {
-    rendered?: string | undefined
-    items?: ContextItem[] | undefined
+    rendered?: string
+    items?: ContextItem[]
 }
 
 export interface PromptContextManager {

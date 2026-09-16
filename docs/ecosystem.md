@@ -139,3 +139,45 @@ bus.on('circuit:open', (_event, { providerId }) => {
     console.error(`[ALERT] Provider circuit tripped for: ${providerId}`)
 })
 ```
+
+---
+
+## 6. Pluggable Tool Execution (`LLMActor` with `@dharmax/shell-proc-utils` & `@dharmax/block-patcher`)
+
+`LLMActor` is the orchestration engine that turns sibling packages into typed agent tools without coupling `@dharmax/llm-utils` to any of them:
+
+### Integration Pattern:
+```ts
+import { Asker, LLMActor, z } from '@dharmax/llm-utils'
+import { applyPatchToFile } from '@dharmax/block-patcher'
+import { exec } from '@dharmax/shell-proc-utils'
+
+const asker = new Asker()
+
+const actor = new LLMActor(asker, {
+    maxSteps: 6,
+    tools: [
+        // 1. Shell execution tool
+        {
+            name: 'run_bash',
+            description: 'Run shell command in workspace and capture stdout/stderr',
+            parameters: z.object({ command: z.string() }),
+            execute: async ({ command }) => exec(command),
+        },
+        // 2. Surgical code editing tool
+        {
+            name: 'patch_file',
+            description: 'Apply SEARCH/REPLACE diff to target file',
+            parameters: z.object({ filePath: z.string(), patch: z.string() }),
+            execute: async ({ filePath, patch }) => applyPatchToFile(filePath, patch),
+        },
+    ],
+})
+
+// Run autonomous agent loop
+const result = await actor.run('Run test suite, and if any test fails, inspect and apply fix')
+if (result.ok) {
+    console.log('Task resolved:', result.finalText)
+}
+```
+

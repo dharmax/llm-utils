@@ -6,7 +6,7 @@ import {
     CompletionEngine,
     ProviderCircuit,
     z,
-} from '../dist/index.mjs'
+} from '../dist/index.js'
 
 test('Asker.json executes and validates with an inferred schema result', async () => {
     let calls = 0

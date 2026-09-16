@@ -3,7 +3,7 @@ import {
     GoogleAdapter,
     OllamaProvider,
     OpenAIAdapter,
-} from './adapters.mjs'
+} from './adapters.ts'
 import type {
     GenerateOptions,
     GenerationResult,
@@ -11,14 +11,14 @@ import type {
     ProviderAdapter,
     ProviderConfig,
     ResponseFormat,
-} from './types.mjs'
+} from './types.ts'
 
 export interface CompletionOptions {
-    system?: string | undefined
-    temperature?: number | undefined
-    format?: ResponseFormat | undefined
-    signal?: AbortSignal | null | undefined
-    timeoutMs?: number | undefined
+    system?: string
+    temperature?: number
+    format?: ResponseFormat
+    signal?: AbortSignal
+    timeoutMs?: number
 }
 
 export function builtInAdapters(): ProviderAdapter[] {

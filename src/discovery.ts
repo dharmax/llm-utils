@@ -1,8 +1,8 @@
-import type {ModelInfo, ProviderConfig} from './types.mjs'
+import type {ModelInfo, ProviderConfig} from './types.ts'
 
 export interface DiscoveryOptions {
-    ollamaHost?: string | undefined
-    customProviders?: Record<string, ProviderConfig> | undefined
+    ollamaHost?: string
+    customProviders?: Record<string, ProviderConfig>
 }
 
 export class ProviderDiscovery {
@@ -32,7 +32,7 @@ export class ProviderDiscovery {
                     id: name,
                     providerId: 'ollama',
                     local: true,
-                    sizeB: typeof m.size === 'number' ? Number((m.size / 1024 ** 3).toFixed(1)) : null,
+                    sizeB: typeof m.size === 'number' ? Number((m.size / 1024 ** 3).toFixed(1)) : undefined,
                 }]
             })
 

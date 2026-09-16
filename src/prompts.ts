@@ -1,7 +1,7 @@
 import {readFile} from 'node:fs/promises'
 import {join} from 'node:path'
 import {fileURLToPath} from 'node:url'
-import type {PromptTemplate} from './types.mjs'
+import type {PromptTemplate} from './types.ts'
 
 export interface TemplateSource {
     fetch?(name: string): Promise<string>

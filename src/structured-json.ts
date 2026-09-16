@@ -1,6 +1,6 @@
 import {jsonrepair} from 'jsonrepair'
 import {z, type ZodError, type ZodIssue, type ZodType} from 'zod'
-import type {JsonSchema, ResponseFormat} from './types.mjs'
+import type {JsonSchema, ResponseFormat} from './types.ts'
 
 export type StructuredJsonFailure = 'parse_failed' | 'schema_invalid'
 
@@ -8,8 +8,8 @@ export class StructuredJsonError extends Error {
     constructor(
         public readonly kind: StructuredJsonFailure,
         message: string,
-        public readonly zodError?: ZodError | undefined,
-        public readonly rawText?: string | undefined,
+        public readonly zodError?: ZodError,
+        public readonly rawText?: string,
     ) {
         super(message)
         this.name = 'StructuredJsonError'
@@ -27,13 +27,13 @@ export function zodToJsonSchema(schema: ZodType): {ok: true; schema: JsonSchema}
     }
 }
 
-export function resolveResponseFormat(schema?: ZodType | undefined, name = 'structured_response'): ResponseFormat {
+export function resolveResponseFormat(schema?: ZodType, name = 'structured_response'): ResponseFormat {
     if (!schema)
-        return {type: 'json'}
+        return 'json'
     const converted = zodToJsonSchema(schema)
     if (converted.ok)
         return {type: 'json_schema', name, schema: converted.schema, strict: true}
-    return {type: 'json'}
+    return 'json'
 }
 
 export function extractJsonCandidate(raw: string): string {
@@ -79,9 +79,9 @@ function tryParseJson(text: string): {ok: true; value: unknown} | {ok: false; er
 
 export function parseStructuredJsonResult<T = unknown>(
     raw: string,
-    schema?: ZodType<T> | undefined,
+    schema?: ZodType<T>,
     label = 'response',
-): {ok: true; data: T} | {ok: false; kind: StructuredJsonFailure; message: string; zodError?: ZodError | undefined; zodIssues?: ZodIssue[] | undefined} {
+): {ok: true; data: T} | {ok: false; kind: StructuredJsonFailure; message: string; zodError?: ZodError; zodIssues?: ZodIssue[]} {
     const trimmed = raw.trim()
     if (!trimmed) {
         return {
@@ -137,7 +137,7 @@ export function parseStructuredJsonResult<T = unknown>(
 
 export function parseStructuredJson<T = unknown>(
     raw: string,
-    schema?: ZodType<T> | undefined,
+    schema?: ZodType<T>,
     label = 'response',
 ): T {
     const result = parseStructuredJsonResult(raw, schema, label)

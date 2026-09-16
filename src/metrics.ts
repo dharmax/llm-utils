@@ -1,5 +1,5 @@
 import {PubSub} from '@dharmax/pubsub'
-import type {GenerationResult, Usage} from './types.mjs'
+import type {GenerationResult, Usage} from './types.ts'
 
 export interface LlmMetricEvent {
     timestamp: string
@@ -10,9 +10,9 @@ export interface LlmMetricEvent {
     totalTokens: number
     latencyMs: number
     success: boolean
-    error?: string | null
+    error?: string
     taskClass?: string
-    costUsd?: number | null
+    costUsd?: number
     metadata?: Record<string, unknown>
 }
 
@@ -23,7 +23,7 @@ export interface MetricsQuery {
     modelId?: string
     taskClass?: string
     success?: boolean
-    limit?: number | null
+    limit?: number
     order?: 'asc' | 'desc'
 }
 
@@ -52,7 +52,7 @@ export interface UsagePricing {
 export class InMemoryMetricsStore {
     private events: LlmMetricEvent[] = []
 
-    constructor(options: {initialEvents?: LlmMetricEvent[]; maxEvents?: number | null} = {}) {
+    constructor(options: {initialEvents?: LlmMetricEvent[]; maxEvents?: number} = {}) {
         if (options.initialEvents)
             this.events = [...options.initialEvents]
     }
@@ -97,12 +97,12 @@ export class InMemoryMetricsStore {
 
 export class LlmMetrics {
     readonly store: InMemoryMetricsStore
-    readonly bus: PubSub | null
+    readonly bus?: PubSub
     readonly origin: string
 
-    constructor(store = new InMemoryMetricsStore(), options: {bus?: PubSub | null; origin?: string} = {}) {
+    constructor(store = new InMemoryMetricsStore(), options: {bus?: PubSub; origin?: string} = {}) {
         this.store = store
-        this.bus = options.bus ?? null
+        this.bus = options.bus
         this.origin = options.origin ?? 'llm-metrics'
     }
 
@@ -122,7 +122,7 @@ export class LlmMetrics {
             totalTokens,
             latencyMs: Math.max(0, Number(event.latencyMs ?? 0)),
             success: Boolean(event.success),
-            error: event.error ?? null,
+            error: event.error,
             ...(event.taskClass ? {taskClass: event.taskClass} : {}),
             costUsd: Number.isFinite(event.costUsd) ? Number(event.costUsd) : 0,
             ...(event.metadata ? {metadata: {...event.metadata}} : {}),
@@ -231,7 +231,7 @@ export class MetricsEngine {
             totalTokens: result.usage.totalTokens,
             latencyMs,
             success: result.ok,
-            error: result.failure?.message ?? null,
+            error: result.failure?.message,
             costUsd: calculateUsageCost(result.usage, pricing),
         })
     }

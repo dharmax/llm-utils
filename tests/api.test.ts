@@ -19,7 +19,7 @@ import {
     ProviderDiscovery,
     StructuredJsonError,
     z,
-} from '../dist/index.mjs'
+} from '../dist/index.js'
 
 class MemoryTemplateSource {
     constructor(entries) {
@@ -255,7 +255,7 @@ test('Asker.ask infers provider from bare model names and local models', async (
     assert.deepEqual(targets[1], {providerId: 'ollama', modelId: 'qwen2.5-coder:7b'})
 
     await asker.local('local prompt')
-    assert.deepEqual(targets[2], {providerId: 'ollama', modelId: 'llama3.2'})
+    assert.deepEqual(targets[2], {providerId: 'ollama', modelId: 'qwen2.5-coder:7b'})
 })
 
 test('Asker.json executes, parses, repairs, and returns typed data', async () => {
@@ -436,5 +436,5 @@ test('ModelRouter resolves explicit targets, bare models, and custom router func
     assert.deepEqual(router.resolve('deepseek-r1'), {providerId: 'ollama', modelId: 'deepseek-r1'})
     assert.deepEqual(router.resolve('custom-task'), {providerId: 'openai', modelId: 'gpt-4o'})
     assert.deepEqual(router.resolve('dynamic'), {providerId: 'anthropic', modelId: 'claude-3-7-sonnet'})
-    assert.deepEqual(router.resolve(undefined, ['ollama'], true), {providerId: 'ollama', modelId: 'llama3.2'})
+    assert.deepEqual(router.resolve(undefined, ['ollama'], true), {providerId: 'ollama', modelId: 'qwen2.5-coder:7b'})
 })

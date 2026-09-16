@@ -12,7 +12,7 @@ import {
     resolveResponseFormat,
     z,
     zodToJsonSchema,
-} from '../dist/index.mjs'
+} from '../dist/index.js'
 
 test('parses direct object and array roots', () => {
     assert.deepEqual(parseStructuredJson('{"value":1}'), {value: 1})

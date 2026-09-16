@@ -1,6 +1,6 @@
-import type {Asker} from './asker.mjs'
-import {MetricsEngine} from './metrics.mjs'
-import type {AskOptions, GenerationResult} from './types.mjs'
+import type {Asker} from './asker.ts'
+import {MetricsEngine} from './metrics.ts'
+import type {AskOptions, GenerationResult} from './types.ts'
 
 export interface SessionMessage {
     role: 'user' | 'ai' | 'system'
@@ -9,7 +9,7 @@ export interface SessionMessage {
 
 export interface SessionContext {
     history: SessionMessage[]
-    metadata?: Record<string, number> | undefined
+    metadata?: Record<string, number>
 }
 
 export class LLMSession {
@@ -19,9 +19,9 @@ export class LLMSession {
     constructor(
         private readonly asker: Asker,
         private readonly options: {
-            initialHistory?: SessionMessage[] | undefined
-            maxHistory?: number | undefined
-            system?: string | undefined
+            initialHistory?: SessionMessage[]
+            maxHistory?: number
+            system?: string
         } = {},
     ) {
         if (options.initialHistory)

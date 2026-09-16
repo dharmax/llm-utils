@@ -1,33 +1,33 @@
 import type {ZodType} from 'zod'
-import {CompletionEngine} from './completion.mjs'
-import {type ContextRequest, type ContextResolver, resolveContext} from './context.mjs'
-import {FileTemplateSource, PromptEngine} from './prompts.mjs'
-import {ProviderCircuit} from './provider-circuit.mjs'
-import {ModelRouter} from './routing.mjs'
+import {CompletionEngine} from './completion.ts'
+import {type ContextRequest, type ContextResolver, resolveContext} from './context.ts'
+import {FileTemplateSource, PromptEngine} from './prompts.ts'
+import {ProviderCircuit} from './provider-circuit.ts'
+import {ModelRouter} from './routing.ts'
 import {
     parseStructuredJsonResult,
     resolveResponseFormat,
-} from './structured-json.mjs'
+} from './structured-json.ts'
 import type {
     AskOptions,
     GenerationResult,
     ModelTarget,
     ProviderConfig,
     ProviderId,
-} from './types.mjs'
+} from './types.ts'
 
 export interface AskerOptions {
-    providers?: Record<string, ProviderConfig> | ProviderConfig[] | undefined
-    providerState?: {providers: Record<string, ProviderConfig>} | undefined
-    router?: ModelRouter | undefined
-    routes?: Record<string, string | ModelTarget> | undefined
-    defaultModel?: string | ModelTarget | undefined
-    preferLocal?: boolean | undefined
-    completion?: CompletionEngine | undefined
-    promptEngine?: PromptEngine | undefined
-    promptsDir?: string | URL | undefined
-    context?: ContextResolver | undefined
-    circuit?: ProviderCircuit | undefined
+    providers?: Record<string, ProviderConfig> | ProviderConfig[]
+    providerState?: {providers: Record<string, ProviderConfig>}
+    router?: ModelRouter
+    routes?: Record<string, string | ModelTarget>
+    defaultModel?: string | ModelTarget
+    preferLocal?: boolean
+    completion?: CompletionEngine
+    promptEngine?: PromptEngine
+    promptsDir?: string | URL
+    context?: ContextResolver
+    circuit?: ProviderCircuit
 }
 
 export class Asker {
@@ -36,7 +36,7 @@ export class Asker {
     private readonly promptEngine: PromptEngine
     private readonly router: ModelRouter
     private readonly circuit: ProviderCircuit
-    private readonly defaultContext: ContextResolver | undefined
+    private readonly defaultContext?: ContextResolver
     private readonly preferLocal: boolean
 
     constructor(options: AskerOptions = {}) {
@@ -228,7 +228,7 @@ export class Asker {
     async prompt<T = unknown>(
         templateName: string,
         data: Record<string, unknown> = {},
-        options: AskOptions<T> & {context?: ContextResolver | undefined} = {},
+        options: AskOptions<T> & {context?: ContextResolver} = {},
     ): Promise<GenerationResult<T>> {
         const {content, manifest} = await this.promptEngine.load(templateName)
         const variables = {...data}
