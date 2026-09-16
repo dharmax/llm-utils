@@ -270,3 +270,56 @@ test('Live Ollama: LLMPipeline executes full multi-phase lifecycle end-to-end', 
     expect(phaseEvents).toContain('verify')
 }, 90000)
 
+test('Live Ollama: LLMPipeline intercepts failure and completes task using onException wisdom', async () => {
+    if (!isOllamaUp) {
+        console.warn(`Skipping live Ollama test: Ollama not reachable at ${ollamaHost}`)
+        return
+    }
+
+    const asker = new Asker({
+        providers: {
+            ollama: {id: 'ollama', host: ollamaHost, available: true},
+        },
+        defaultModel: `ollama/${testModel}`,
+    })
+
+    let wisdomInjected = false
+
+    const tools = [
+        {
+            name: 'get_server_metrics',
+            description: 'Returns telemetry metrics for a named server instance',
+            parameters: z.object({
+                serverId: z.string().describe('Server hostname'),
+                apiToken: z.string().optional().describe('Authentication token'),
+            }),
+            execute: ({serverId, apiToken}: {serverId: string; apiToken?: string}) => {
+                if (apiToken !== 'SECRET_TOKEN_789') {
+                    throw new Error('Unauthorized: valid apiToken is required')
+                }
+                return {serverId, uptimeDays: 142, loadAvg: 0.42}
+            },
+        },
+    ]
+
+    const pipeline = new LLMPipeline(asker, {
+        tools,
+        maxStepsPerPhase: 3,
+        onException: (exc) => {
+            wisdomInjected = true
+            return {
+                action: 'retry',
+                wisdom: 'Authentication required. Call get_server_metrics with serverId "omega" and apiToken "SECRET_TOKEN_789".',
+            }
+        },
+    })
+
+    const goal = 'Get metrics for server "omega" using get_server_metrics and report its uptimeDays.'
+    const result = await pipeline.run(goal)
+
+    expect(wisdomInjected).toBe(true)
+    expect(result.ok).toBe(true)
+    expect(result.finalText).toContain('142')
+}, 90000)
+
+

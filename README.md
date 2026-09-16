@@ -361,6 +361,42 @@ const pipeline = new LLMPipeline(asker, {
 })
 ```
 
+### Happy Path + Exception Wisdom Interceptor
+
+Rather than managing bloated Finite State Machine (FSM) graphs, `LLMPipeline` executes the straightforward **Happy Path** by default. When reality diverges (tool authentication error, missing parameter, budget exceeded), an optional `onException` callback intercepts the failure to inject contextual **Wisdom** or fallback data:
+
+```ts
+const pipeline = new LLMPipeline(asker, {
+    tools,
+    maxStepRetries: 2,
+    throwOnError: true, // Throws descriptive Error on unhandled abort
+    onException: (exc) => {
+        console.warn(`Step ${exc.step.id} failed (attempt ${exc.attempt}):`, exc.error)
+
+        // 1. Inject Wisdom to self-correct on retry:
+        if (exc.error.includes('Unauthorized')) {
+            return {
+                action: 'retry',
+                wisdom: 'Authentication required. Call get_server_metrics with apiToken "SECRET_123".',
+            }
+        }
+
+        // 2. Or provide fallback data and continue happy path:
+        if (exc.step.id === 'fetch_cached_stats') {
+            return { action: 'continue', fallbackOutput: 'default_stats_baseline' }
+        }
+
+        // 3. Or skip non-critical steps:
+        if (exc.step.id === 'send_slack_ping') {
+            return { action: 'skip' }
+        }
+
+        // 4. Or fail fast:
+        return { action: 'abort', reason: 'Security violation' }
+    },
+})
+```
+
 ---
 
 ## Prompt Templates: `PromptEngine`

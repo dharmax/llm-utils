@@ -212,3 +212,305 @@ test('LLMPipeline supports custom adapters via Service Adapter Pattern', async (
     expect(result.intent.normalizedGoal).toBe('Custom: Do something')
     expect(result.plan.strategy).toBe('Custom plan strategy')
 })
+
+test('LLMPipeline onException injects wisdom and recovers on retry', async () => {
+    let exceptionCaught = false
+    let attemptCount = 0
+
+    const asker = createEchoAsker({
+        'Use port 8080': {
+            thought: 'Applying injected wisdom to use port 8080',
+            action: 'final_answer',
+            finalAnswer: 'Service on port 8080 is online',
+        },
+        'Synthesize the final': 'Service is fully online on port 8080.',
+    })
+
+    const pipeline = new LLMPipeline(asker, {
+        preprocessor: {
+            async preprocess(goal) {
+                return {
+                    normalizedGoal: goal,
+                    constraints: [],
+                    relevantTools: [],
+                    suggestedPhases: ['check'],
+                }
+            },
+        },
+        planner: {
+            async plan() {
+                return {
+                    strategy: 'Single step',
+                    steps: [{id: 'step_1', description: 'Connect to service', assignedTools: []}],
+                }
+            },
+        },
+        maxStepsPerPhase: 1,
+    })
+
+    // To simulate step failure on attempt 1:
+    // With maxStepsPerPhase=1 and createEchoAsker returning tool_call when not matching,
+    // let's pass an asker that fails on the first prompt and succeeds on the wisdom prompt.
+    const failingFirstAsker = new CompletionEngine([]).registerAdapter({
+        id: 'failing-adapter',
+        async generate(options) {
+            if (options.prompt.includes('Use port 8080')) {
+                return {
+                    ok: true,
+                    text: JSON.stringify({
+                        action: 'final_answer',
+                        thought: 'Got wisdom',
+                        finalAnswer: 'Success on port 8080',
+                    }),
+                    model: {providerId: 'failing-adapter', modelId: options.modelId},
+                }
+            }
+            if (options.prompt.includes('Synthesize')) {
+                return {
+                    ok: true,
+                    text: 'Final synthesized output with wisdom applied',
+                    model: {providerId: 'failing-adapter', modelId: options.modelId},
+                }
+            }
+            // First attempt produces a tool call to a non-existent tool or bad response
+            return {
+                ok: true,
+                text: JSON.stringify({
+                    action: 'tool_call',
+                    thought: 'Connecting to default port 80',
+                    toolCalls: [{callId: 'bad_call', name: 'unregistered_tool', parameters: {}}],
+                }),
+                model: {providerId: 'failing-adapter', modelId: options.modelId},
+            }
+        },
+    })
+
+    const testAsker = new Asker({
+        providers: {'failing-adapter': {id: 'failing-adapter', available: true}},
+        completion: failingFirstAsker,
+        routes: {default: 'failing-adapter/model'},
+    })
+
+    const resilientPipeline = new LLMPipeline(testAsker, {
+        preprocessor: {
+            async preprocess(goal) {
+                return {normalizedGoal: goal, constraints: [], relevantTools: [], suggestedPhases: ['test']}
+            },
+        },
+        planner: {
+            async plan() {
+                return {strategy: 'Test', steps: [{id: 's1', description: 'Connect to port', assignedTools: []}]}
+            },
+        },
+        maxStepsPerPhase: 1,
+        onException: (exc) => {
+            exceptionCaught = true
+            attemptCount = exc.attempt
+            expect(exc.step.id).toBe('s1')
+            return {
+                action: 'retry',
+                wisdom: 'Use port 8080',
+            }
+        },
+    })
+
+    const result = await resilientPipeline.run('Connect to port')
+
+    expect(exceptionCaught).toBe(true)
+    expect(attemptCount).toBe(1)
+    expect(result.ok).toBe(true)
+    expect(result.stepOutputs['s1']).toBe('Success on port 8080')
+    expect(result.finalText).toBe('Final synthesized output with wisdom applied')
+})
+
+test('LLMPipeline onException provides fallbackOutput and continues happy path', async () => {
+    let exceptionCaught = false
+
+    const completion = new CompletionEngine([]).registerAdapter({
+        id: 'fallback-adapter',
+        async generate(options) {
+            if (options.prompt.includes('Synthesize')) {
+                return {
+                    ok: true,
+                    text: 'Synthesized with fallback',
+                    model: {providerId: 'fallback-adapter', modelId: options.modelId},
+                }
+            }
+            if (options.prompt.includes('Result of s1')) {
+                return {
+                    ok: true,
+                    text: JSON.stringify({
+                        action: 'final_answer',
+                        thought: 'Got fallback from s1',
+                        finalAnswer: 'Processed fallback successfully',
+                    }),
+                    model: {providerId: 'fallback-adapter', modelId: options.modelId},
+                }
+            }
+            // Step 1 fails by calling invalid tool with maxSteps 1
+            return {
+                ok: true,
+                text: JSON.stringify({
+                    action: 'tool_call',
+                    thought: 'Failing step 1',
+                    toolCalls: [{callId: 'fail', name: 'missing_tool', parameters: {}}],
+                }),
+                model: {providerId: 'fallback-adapter', modelId: options.modelId},
+            }
+        },
+    })
+
+    const asker = new Asker({
+        providers: {'fallback-adapter': {id: 'fallback-adapter', available: true}},
+        completion,
+        routes: {default: 'fallback-adapter/model'},
+    })
+
+    const pipeline = new LLMPipeline(asker, {
+        preprocessor: {
+            async preprocess(goal) {
+                return {normalizedGoal: goal, constraints: [], relevantTools: [], suggestedPhases: ['s1', 's2']}
+            },
+        },
+        planner: {
+            async plan() {
+                return {
+                    strategy: 'Two steps',
+                    steps: [
+                        {id: 's1', description: 'Fetch external data', assignedTools: []},
+                        {id: 's2', description: 'Process external data', assignedTools: [], dependsOn: ['s1']},
+                    ],
+                }
+            },
+        },
+        maxStepsPerPhase: 1,
+        onException: (exc) => {
+            exceptionCaught = true
+            expect(exc.step.id).toBe('s1')
+            return {
+                action: 'continue',
+                fallbackOutput: 'cached_dataset_v1',
+            }
+        },
+    })
+
+    const result = await pipeline.run('Fetch and process')
+
+    expect(exceptionCaught).toBe(true)
+    expect(result.ok).toBe(true)
+    expect(result.stepOutputs['s1']).toBe('cached_dataset_v1')
+    expect(result.stepOutputs['s2']).toBe('Processed fallback successfully')
+})
+
+test('LLMPipeline onException skips failing step when instructed', async () => {
+    const completion = new CompletionEngine([]).registerAdapter({
+        id: 'skip-adapter',
+        async generate(options) {
+            if (options.prompt.includes('Synthesize')) {
+                return {
+                    ok: true,
+                    text: 'Synthesized after skip',
+                    model: {providerId: 'skip-adapter', modelId: options.modelId},
+                }
+            }
+            return {
+                ok: true,
+                text: JSON.stringify({
+                    action: 'tool_call',
+                    thought: 'Failing step',
+                    toolCalls: [{callId: 'fail', name: 'missing', parameters: {}}],
+                }),
+                model: {providerId: 'skip-adapter', modelId: options.modelId},
+            }
+        },
+    })
+
+    const asker = new Asker({
+        providers: {'skip-adapter': {id: 'skip-adapter', available: true}},
+        completion,
+        routes: {default: 'skip-adapter/model'},
+    })
+
+    const pipeline = new LLMPipeline(asker, {
+        preprocessor: {
+            async preprocess(goal) {
+                return {normalizedGoal: goal, constraints: [], relevantTools: [], suggestedPhases: ['s1']}
+            },
+        },
+        planner: {
+            async plan() {
+                return {strategy: 'Single', steps: [{id: 's1', description: 'Optional step', assignedTools: []}]}
+            },
+        },
+        maxStepsPerPhase: 1,
+        onException: () => ({action: 'skip'}),
+    })
+
+    const result = await pipeline.run('Try optional step')
+
+    expect(result.ok).toBe(true)
+    expect(result.stepOutputs['s1']).toBe('Skipped by exception handler')
+})
+
+test('LLMPipeline onException cleanly aborts or throws on error with explanation', async () => {
+    const completion = new CompletionEngine([]).registerAdapter({
+        id: 'abort-adapter',
+        async generate() {
+            return {
+                ok: true,
+                text: JSON.stringify({
+                    action: 'tool_call',
+                    thought: 'Failing step',
+                    toolCalls: [{callId: 'f', name: 'missing', parameters: {}}],
+                }),
+                model: {providerId: 'abort-adapter', modelId: 'test'},
+            }
+        },
+    })
+
+    const asker = new Asker({
+        providers: {'abort-adapter': {id: 'abort-adapter', available: true}},
+        completion,
+        routes: {default: 'abort-adapter/test'},
+    })
+
+    // 1. Abort returns { ok: false, error: ... }
+    const abortPipeline = new LLMPipeline(asker, {
+        preprocessor: {
+            async preprocess(goal) {
+                return {normalizedGoal: goal, constraints: [], relevantTools: [], suggestedPhases: ['s1']}
+            },
+        },
+        planner: {
+            async plan() {
+                return {strategy: 'Single', steps: [{id: 's1', description: 'Critical step', assignedTools: []}]}
+            },
+        },
+        maxStepsPerPhase: 1,
+        onException: () => ({action: 'abort', reason: 'Security check failed: unauthorized'}),
+    })
+
+    const abortResult = await abortPipeline.run('Critical task')
+    expect(abortResult.ok).toBe(false)
+    expect(abortResult.error).toBe('Security check failed: unauthorized')
+
+    // 2. throwOnError throws Error with explanation
+    const throwPipeline = new LLMPipeline(asker, {
+        preprocessor: {
+            async preprocess(goal) {
+                return {normalizedGoal: goal, constraints: [], relevantTools: [], suggestedPhases: ['s1']}
+            },
+        },
+        planner: {
+            async plan() {
+                return {strategy: 'Single', steps: [{id: 's1', description: 'Critical step', assignedTools: []}]}
+            },
+        },
+        maxStepsPerPhase: 1,
+        throwOnError: true,
+        onException: () => ({action: 'abort', reason: 'Unrecoverable critical failure'}),
+    })
+
+    expect(throwPipeline.run('Critical task')).rejects.toThrow('Unrecoverable critical failure')
+})
+
