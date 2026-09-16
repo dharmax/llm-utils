@@ -27,6 +27,7 @@ export interface AskerOptions {
     promptEngine?: PromptEngine
     promptsDir?: string | URL
     context?: ContextResolver
+    contextResolver?: ContextResolver
     circuit?: ProviderCircuit
 }
 
@@ -43,7 +44,7 @@ export class Asker {
         this.completion = options.completion ?? new CompletionEngine()
         this.promptEngine = options.promptEngine ?? (options.promptsDir ? new PromptEngine(new FileTemplateSource(options.promptsDir)) : new PromptEngine())
         this.circuit = options.circuit ?? new ProviderCircuit()
-        this.defaultContext = options.context
+        this.defaultContext = options.contextResolver ?? options.context
         this.preferLocal = Boolean(options.preferLocal)
 
         // Configure router
@@ -161,7 +162,23 @@ export class Asker {
             return res as GenerationResult<T>
         }
 
-        const initial = await executeCall(prompt)
+        let effectivePrompt = prompt
+        const reqContext = options.context
+        const activeResolver = (typeof reqContext === 'function' || (reqContext && 'resolve' in reqContext))
+            ? (reqContext as ContextResolver)
+            : this.defaultContext
+
+        if (activeResolver) {
+            const req: ContextRequest = (reqContext && typeof reqContext === 'object' && 'query' in reqContext)
+                ? reqContext as ContextRequest
+                : {query: prompt}
+            const contextText = await resolveContext(activeResolver, req)
+            if (contextText) {
+                effectivePrompt = `## Retrieved Context\n${contextText}\n\n## Question\n${prompt}`
+            }
+        }
+
+        const initial = await executeCall(effectivePrompt)
         if (!initial.ok || !options.schema)
             return initial
 
@@ -176,7 +193,7 @@ export class Asker {
         let lastError = parsed.message
 
         for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
-            const correctionPrompt = `${prompt}\n\nPrevious response failed validation:\n${lastError}\nPlease output the correct JSON matching the required schema.`
+            const correctionPrompt = `${effectivePrompt}\n\nPrevious response failed validation:\n${lastError}\nPlease output the correct JSON matching the required schema.`
             const retryRes = await executeCall(correctionPrompt)
             if (!retryRes.ok)
                 return retryRes
@@ -228,19 +245,25 @@ export class Asker {
     async prompt<T = unknown>(
         templateName: string,
         data: Record<string, unknown> = {},
-        options: AskOptions<T> & {context?: ContextResolver} = {},
+        options: AskOptions<T> & {contextResolver?: ContextResolver} = {},
     ): Promise<GenerationResult<T>> {
         const {content, manifest} = await this.promptEngine.load(templateName)
         const variables = {...data}
 
         // Context injection
-        const contextResolver = options.context ?? this.defaultContext
+        const reqContext = options.context
+        const contextResolver = (typeof reqContext === 'function' || (reqContext && 'resolve' in reqContext))
+            ? (reqContext as ContextResolver)
+            : (options.contextResolver ?? this.defaultContext)
+
         if (contextResolver) {
-            const request: ContextRequest = {
-                query: String(data.inputText ?? data.prompt ?? data.query ?? ''),
-                taskType: options.task ?? (typeof manifest.taskType === 'string' ? manifest.taskType : undefined),
-                history: Array.isArray(data.history) ? data.history : undefined,
-            }
+            const request: ContextRequest = (reqContext && typeof reqContext === 'object' && 'query' in reqContext)
+                ? (reqContext as ContextRequest)
+                : {
+                    query: String(data.inputText ?? data.prompt ?? data.query ?? ''),
+                    taskType: options.task ?? (typeof manifest.taskType === 'string' ? manifest.taskType : undefined),
+                    history: Array.isArray(data.history) ? data.history : undefined,
+                }
             const contextText = await resolveContext(contextResolver, request)
             if (contextText)
                 variables.context = contextText

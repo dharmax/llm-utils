@@ -53,7 +53,12 @@ export class CompletionEngine {
         config: ProviderConfig,
         options: CompletionOptions = {},
     ): Promise<GenerationResult> {
-        const adapter = this.adapters.get(model.providerId)
+        let adapter = this.adapters.get(model.providerId)
+        if (!adapter && config.baseUrl) {
+            // Universal fallback: OpenAI wire protocol is the industry standard for custom endpoints
+            adapter = new OpenAIAdapter(model.providerId)
+        }
+
         if (!adapter) {
             return {
                 ok: false,

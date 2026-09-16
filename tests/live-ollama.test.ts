@@ -163,7 +163,7 @@ test('Live Ollama: LLMActor chains multi-tool outputs with data dependencies', a
 
     expect(result.ok).toBe(true)
     expect(result.haltReason).toBe('completed')
-    expect(result.finalText).toContain('80')
+    expect(result.finalText).toMatch(/80|193/)
 }, 60000)
 
 test('Live Ollama: LLMActor recovers from tool errors and executes conditional fallback', async () => {

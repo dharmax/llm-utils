@@ -8,7 +8,11 @@ import type {
 } from './types.ts'
 
 export class OpenAIAdapter implements ProviderAdapter {
-    readonly id = 'openai'
+    readonly id: string
+
+    constructor(id = 'openai') {
+        this.id = id
+    }
 
     async generate(options: GenerateOptions): Promise<GenerationResult> {
         const {modelId, prompt, system, config, format, signal, timeoutMs, temperature} = options

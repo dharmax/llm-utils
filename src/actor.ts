@@ -75,7 +75,8 @@ const ActorDecisionSchema = z.object({
     thought: z.string().describe('Reasoning on the current situation and required action'),
     action: z.enum(['tool_call', 'final_answer']).describe('Choose tool_call to execute tools, or final_answer if goal is achieved'),
     toolCalls: z.array(z.object({
-        callId: z.string().describe('Unique identifier for this call (e.g. call_1)'),
+        callId: z.string().optional().describe('Unique identifier for this call (e.g. call_1)'),
+        id: z.string().optional().describe('Alias for callId'),
         name: z.string().describe('Name of the tool to invoke'),
         parameters: z.record(z.string(), z.unknown()).describe('Tool arguments as key-value pairs'),
     })).optional().default([]),
@@ -107,6 +108,12 @@ export function normalizeToolParameters(params: Record<string, unknown>, schema:
                 normalized[key] = inner.expr
             } else if ('expression' in inner && typeof inner.expression === 'string') {
                 normalized[key] = inner.expression
+            } else if ('description' in inner && typeof inner.description === 'string') {
+                normalized[key] = inner.description
+            } else if ('text' in inner && typeof inner.text === 'string') {
+                normalized[key] = inner.text
+            } else if ('content' in inner && typeof inner.content === 'string') {
+                normalized[key] = inner.content
             } else {
                 const values = Object.values(inner)
                 const keys = Object.keys(inner)
@@ -225,8 +232,8 @@ export class LLMActor {
         }
 
         // Handle tool calls
-        const toolCalls: ToolInvocation[] = (decision.toolCalls ?? []).map(tc => ({
-            callId: tc.callId,
+        const toolCalls: ToolInvocation[] = (decision.toolCalls ?? []).map((tc, idx) => ({
+            callId: tc.callId ?? tc.id ?? `call_${idx + 1}`,
             toolName: tc.name,
             parameters: tc.parameters,
         }))

@@ -13,7 +13,7 @@ export interface SessionContext {
 }
 
 export class LLMSession {
-    private history: SessionMessage[] = []
+    private _history: SessionMessage[] = []
     private readonly metrics: MetricsEngine
 
     constructor(
@@ -21,11 +21,12 @@ export class LLMSession {
         private readonly options: {
             initialHistory?: SessionMessage[]
             maxHistory?: number
+            maxHistoryTurns?: number
             system?: string
         } = {},
     ) {
         if (options.initialHistory)
-            this.history = [...options.initialHistory]
+            this._history = [...options.initialHistory]
         this.metrics = new MetricsEngine()
     }
 
@@ -40,8 +41,8 @@ export class LLMSession {
         const system = options.system ?? this.options.system
 
         // Prepend conversation context
-        const contextPrompt = this.history.length > 0
-            ? `${this.history.map(m => `[${m.role.toUpperCase()}]: ${m.content}`).join('\n')}\n[USER]: ${prompt}`
+        const contextPrompt = this._history.length > 0
+            ? `${this._history.map(m => `[${m.role.toUpperCase()}]: ${m.content}`).join('\n')}\n[USER]: ${prompt}`
             : prompt
 
         const result = await this.asker.ask(contextPrompt, {
@@ -52,12 +53,12 @@ export class LLMSession {
 
         if (result.ok) {
             this.metrics.record(result, latencyMs)
-            this.history.push({role: 'user', content: prompt})
-            this.history.push({role: 'ai', content: result.text})
+            this._history.push({role: 'user', content: prompt})
+            this._history.push({role: 'ai', content: result.text})
 
-            const max = this.options.maxHistory ?? 50
-            if (this.history.length > max)
-                this.history = this.history.slice(-max)
+            const max = this.options.maxHistory ?? this.options.maxHistoryTurns ?? 50
+            if (this._history.length > max)
+                this._history = this._history.slice(-max)
         }
 
         return {...result, latencyMs}
@@ -73,7 +74,7 @@ export class LLMSession {
     ): Promise<GenerationResult> {
         const enrichedData = {
             ...data,
-            history: this.history,
+            history: this._history,
         }
 
         const startedAt = Date.now()
@@ -91,19 +92,23 @@ export class LLMSession {
                 : typeof data.prompt === 'string'
                     ? data.prompt
                     : 'Prompt'
-            this.history.push({role: 'user', content: userContent})
-            this.history.push({role: 'ai', content: result.text})
+            this._history.push({role: 'user', content: userContent})
+            this._history.push({role: 'ai', content: result.text})
 
-            const max = this.options.maxHistory ?? 50
-            if (this.history.length > max)
-                this.history = this.history.slice(-max)
+            const max = this.options.maxHistory ?? this.options.maxHistoryTurns ?? 50
+            if (this._history.length > max)
+                this._history = this._history.slice(-max)
         }
 
         return {...result, latencyMs}
     }
 
+    get history(): SessionMessage[] {
+        return this.getHistory()
+    }
+
     getHistory(): SessionMessage[] {
-        return [...this.history]
+        return [...this._history]
     }
 
     getContext(): SessionContext {
@@ -114,6 +119,6 @@ export class LLMSession {
     }
 
     clear(): void {
-        this.history = []
+        this._history = []
     }
 }

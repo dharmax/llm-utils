@@ -113,5 +113,13 @@ export function createDesktopActor(asker: Asker = new Asker()): LLMActor {
 
 // Standalone execution entrypoint when run directly via Bun
 if (import.meta.url === `file://${process.argv[1]}`) {
-    console.log('Equipped desktop tools:', createDesktopTools().map(t => t.name).join(', '))
+    const goal = process.argv[2] ?? "Run the 'date' command using run_linux_command and report the output."
+    console.log(`[Desktop Actor Demo] Goal: "${goal}"\n`)
+    const actor = createDesktopActor()
+    const result = await actor.run(goal)
+    if (result.ok) {
+        console.log('\n[Resolution]:', result.finalText)
+    } else {
+        console.error('\n[Failed]:', result.error)
+    }
 }

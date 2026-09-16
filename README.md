@@ -70,7 +70,7 @@ const res = await asker.ask('Hello from Bun!')
 
 if (res.ok) {
     console.log(res.text)
-    console.log(`Used ${res.usage.totalTokens} tokens via ${res.providerId}/${res.modelId}`)
+    console.log(`Used ${res.usage?.totalTokens ?? 0} tokens via ${res.model.providerId}/${res.model.modelId}`)
 }
 ```
 
@@ -138,7 +138,7 @@ import { Asker } from '@dharmax/llm-utils'
 
 const asker = new Asker()
 
-// Automatically targets local Ollama (llama3.2 by default)
+// Automatically targets local Ollama (qwen2.5-coder:7b by default)
 const res = await asker.local('Summarize this private diff.')
 console.log(res.text)
 
@@ -177,7 +177,7 @@ await asker.ask('Build an LRU cache', { task: 'code' })        // openai/gpt-4o
 await asker.ask('Quick spellcheck', { task: 'fast' })         // google/gemini-2.0-flash
 await asker.ask('Complex logic puzzle', { task: 'reasoning' }) // openai/o3-mini
 await asker.ask('Creative story', { task: 'creative' })       // anthropic/claude-3-7-sonnet
-await asker.ask('Local privacy task', { task: 'local' })       // ollama/llama3.2
+await asker.ask('Local privacy task', { task: 'local' })       // ollama/qwen2.5-coder:7b
 ```
 
 Configure custom routers or target models when instantiating `Asker`:
@@ -476,7 +476,7 @@ import { Asker, type ContextResolver } from '@dharmax/llm-utils'
 const resolver: ContextResolver = async (req) => {
     return {
         items: [
-            { source: 'schema.sql', content: 'CREATE TABLE users (id INT, email TEXT);' },
+            { id: '1', title: 'schema.sql', content: 'CREATE TABLE users (id INT, email TEXT);' },
         ],
     }
 }
@@ -547,6 +547,7 @@ console.log(metrics.totals())
 // Core Clients
 export { Asker } from '@dharmax/llm-utils'
 export { LLMActor } from '@dharmax/llm-utils'
+export { LLMPipeline } from '@dharmax/llm-utils'
 export { LLMSession } from '@dharmax/llm-utils'
 
 // Types & Schemas
@@ -565,6 +566,13 @@ export type {
     ActorStepRecord,
     ActorRunResult,
     ActorRunOptions,
+    PipelineStepException,
+    PipelineExceptionResolution,
+    PipelineExceptionHandler,
+    PreprocessedIntent,
+    ExecutionPlan,
+    PlanStep,
+    PipelineRunResult,
     ContextResolver,
     ContextRequest,
     ContextResult,
@@ -597,7 +605,7 @@ export {
 ## Development & Verification
 
 ```sh
-bun test           # Runs all 43 tests via bun:test (under 250ms)
+bun test           # Runs full test suite (unit + live Ollama agentic flows)
 bun run typecheck  # Strict TypeScript check (tsc --noEmit)
 bun run build      # Bundles neutral ESM and emits .d.ts declarations
 ```

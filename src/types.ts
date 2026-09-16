@@ -1,4 +1,5 @@
 import type {ZodType} from 'zod'
+import type {ContextRequest, ContextResolver} from './context.ts'
 
 export type ProviderId = string
 
@@ -107,4 +108,5 @@ export interface AskOptions<T = unknown> {
     timeoutMs?: number
     maxRetries?: number
     providerConfig?: ProviderConfig
+    context?: ContextRequest | ContextResolver
 }
