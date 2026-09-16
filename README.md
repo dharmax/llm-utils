@@ -278,6 +278,27 @@ Run it instantly with Bun:
 bun examples/tools-actor.ts
 ```
 
+### 4. Interactive REPL CLI
+
+Test natural language prompts, RAG, and autonomous tool augmentation interactively with your live local Ollama model or cloud models:
+
+```sh
+# Start interactive REPL
+bun run repl
+# or
+bun run cli
+
+# Single-shot goal execution with real-time tool logs
+bun run cli "What is the git status in this repository? Use run_linux_command."
+bun run cli "Calculate (45 * 12) / 3 using eval_math and tell me the result."
+```
+
+During interactive sessions, the REPL supports slash commands:
+* `/tools` — View all equipped tools and parameter schemas
+* `/models` — Inspect auto-detected local Ollama models
+* `/clear` — Clear terminal screen
+* `exit` — Exit REPL
+
 ---
 
 ## Prompt Templates: `PromptEngine`

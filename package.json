@@ -14,9 +14,13 @@
       "default": "./src/index.ts"
     }
   },
+  "bin": {
+    "llm": "./bin/cli.ts"
+  },
   "files": [
     "dist",
     "src",
+    "bin",
     "docs",
     "README.md",
     "LICENSE"
@@ -25,7 +29,9 @@
     "build": "rm -rf dist && esbuild src/index.ts --bundle --platform=neutral --format=esm --outfile=dist/index.js --sourcemap --resolve-extensions=.ts,.tsx,.js,.json --external:zod && tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "check": "bun test",
-    "test": "bun test"
+    "test": "bun test",
+    "cli": "bun bin/cli.ts",
+    "repl": "bun bin/cli.ts"
   },
   "keywords": [
     "llm",

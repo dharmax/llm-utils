@@ -1,6 +1,7 @@
 import type {ZodType} from 'zod'
 import {z} from 'zod'
 import type {Asker} from './asker.ts'
+import {type ContextResolver, resolveContext} from './context.ts'
 import {parseStructuredJsonResult, zodToJsonSchema} from './structured-json.ts'
 import type {AskOptions} from './types.ts'
 
@@ -52,6 +53,7 @@ export interface ActorOptions {
     system?: string
     askOptions?: AskOptions
     onStep?: (record: ActorStepRecord) => void | Promise<void>
+    contextResolver?: ContextResolver
 }
 
 export interface ActorRunOptions<T = unknown> {
@@ -60,6 +62,7 @@ export interface ActorRunOptions<T = unknown> {
     signal?: AbortSignal
     context?: unknown
     askOptions?: AskOptions
+    contextResolver?: ContextResolver
 }
 
 export interface ActorStepResult {
@@ -81,12 +84,45 @@ const ActorDecisionSchema = z.object({
 
 export type ActorDecision = z.infer<typeof ActorDecisionSchema>
 
+export function normalizeToolParameters(params: Record<string, unknown>, schema: ZodType): Record<string, unknown> {
+    if (typeof params !== 'object' || params === null)
+        return params
+
+    if (schema.safeParse(params).success)
+        return params
+
+    const normalized: Record<string, unknown> = {...params}
+    for (const [key, val] of Object.entries(normalized)) {
+        if (typeof val === 'object' && val !== null && !Array.isArray(val)) {
+            const inner = val as Record<string, unknown>
+            if ('value' in inner) {
+                normalized[key] = inner.value
+            } else if (key in inner) {
+                normalized[key] = inner[key]
+            } else {
+                const values = Object.values(inner)
+                const keys = Object.keys(inner)
+                if (values.length === 1) {
+                    const firstVal = values[0]
+                    if (typeof firstVal === 'string' || typeof firstVal === 'number' || typeof firstVal === 'boolean') {
+                        normalized[key] = firstVal
+                    } else if (firstVal === null || firstVal === undefined || firstVal === '') {
+                        normalized[key] = keys[0]
+                    }
+                }
+            }
+        }
+    }
+    return normalized
+}
+
 export class LLMActor {
     private readonly tools = new Map<string, ToolDefinition>()
     private readonly maxSteps: number
     private readonly system?: string
     private readonly defaultAskOptions?: AskOptions
     private readonly onStep?: (record: ActorStepRecord) => void | Promise<void>
+    private readonly contextResolver?: ContextResolver
 
     constructor(
         private readonly asker: Asker,
@@ -96,6 +132,7 @@ export class LLMActor {
         this.system = options.system
         this.defaultAskOptions = options.askOptions
         this.onStep = options.onStep
+        this.contextResolver = options.contextResolver
 
         for (const tool of options.tools ?? [])
             this.registerTool(tool)
@@ -197,8 +234,10 @@ export class LLMActor {
                 continue
             }
 
-            // Validate parameters
-            const parsed = tool.parameters.safeParse(call.parameters)
+            // Validate parameters with normalization for local models
+            const normalizedParams = normalizeToolParameters(call.parameters, tool.parameters)
+            call.parameters = normalizedParams
+            const parsed = tool.parameters.safeParse(normalizedParams)
             if (!parsed.success) {
                 toolResults.push({
                     callId: call.callId,
@@ -250,6 +289,16 @@ export class LLMActor {
         const steps: ActorStepRecord[] = []
         const signal = options.signal
 
+        // Auto-inject RAG context if contextResolver is provided
+        let effectiveGoal = goal
+        const resolver = options.contextResolver ?? this.contextResolver
+        if (resolver) {
+            const ctxText = await resolveContext(resolver, {query: goal})
+            if (ctxText) {
+                effectiveGoal = `## Retrieved Context\n${ctxText}\n\n## Goal\n${goal}`
+            }
+        }
+
         while (steps.length < max) {
             if (signal?.aborted) {
                 return {
@@ -262,7 +311,7 @@ export class LLMActor {
                 }
             }
 
-            const stepResult = await this.step(goal, steps, options.context, options.askOptions)
+            const stepResult = await this.step(effectiveGoal, steps, options.context, options.askOptions)
             steps.push(stepResult.record)
 
             if (this.onStep) {
@@ -324,7 +373,11 @@ export class LLMActor {
 
         return tools.map(t => {
             const converted = zodToJsonSchema(t.parameters)
-            const schemaJson = converted.ok ? converted.schema : {type: 'object'}
+            let schemaJson: Record<string, unknown> = {type: 'object'}
+            if (converted.ok && typeof converted.schema === 'object' && converted.schema !== null) {
+                const {$schema, additionalProperties, ...rest} = converted.schema as Record<string, unknown>
+                schemaJson = rest
+            }
             return `### Tool: ${t.name}\nDescription: ${t.description}\nParameters JSON Schema:\n${JSON.stringify(schemaJson, null, 2)}`
         }).join('\n\n')
     }
@@ -338,9 +391,10 @@ ${catalog}
 
 ## Operational Rules
 1. Reason carefully in the "thought" field before taking action.
-2. To gather info or modify state, set action="tool_call" and specify toolCalls with valid parameters matching the schema.
-3. If you have gathered sufficient information or completed the task, set action="final_answer" and formulate a clear, complete response in "finalAnswer".
-4. Always produce output strictly matching the required JSON format.`
+2. To gather info or modify state, set action="tool_call" and specify toolCalls with concrete runtime parameter values (e.g. { "callId": "1", "name": "tool_name", "parameters": { "paramName": "actual_value" } }).
+3. NEVER put JSON schema definitions, type names, or JSON pointers (like "#/...") in "parameters". Always provide the actual runtime values.
+4. When the goal is accomplished or you have the answer, IMMEDIATELY choose action="final_answer" and formulate your response in "finalAnswer". Do NOT invoke notification/messaging tools to tell the user the answer.
+5. Always produce output strictly matching the required JSON format.`
     }
 
     private buildTurnPrompt(goal: string, history: ActorStepRecord[], currentStep: number): string {
