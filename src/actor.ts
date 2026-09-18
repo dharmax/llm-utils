@@ -54,6 +54,11 @@ export interface ActorOptions {
     askOptions?: AskOptions
     onStep?: (record: ActorStepRecord) => void | Promise<void>
     contextResolver?: ContextResolver
+    onMissingTool?: (
+        toolName: string,
+        parameters: Record<string, unknown>,
+        context?: unknown
+    ) => Promise<ToolExecutionResult | ToolDefinition | undefined> | ToolExecutionResult | ToolDefinition | undefined
 }
 
 export interface ActorRunOptions<T = unknown> {
@@ -133,6 +138,11 @@ export class LLMActor {
     private readonly defaultAskOptions?: AskOptions
     private readonly onStep?: (record: ActorStepRecord) => void | Promise<void>
     private readonly contextResolver?: ContextResolver
+    private readonly onMissingTool?: (
+        toolName: string,
+        parameters: Record<string, unknown>,
+        context?: unknown
+    ) => Promise<ToolExecutionResult | ToolDefinition | undefined> | ToolExecutionResult | ToolDefinition | undefined
 
     constructor(
         private readonly asker: Asker,
@@ -143,6 +153,7 @@ export class LLMActor {
         this.defaultAskOptions = options.askOptions
         this.onStep = options.onStep
         this.contextResolver = options.contextResolver
+        this.onMissingTool = options.onMissingTool
 
         for (const tool of options.tools ?? [])
             this.registerTool(tool)
@@ -233,7 +244,31 @@ export class LLMActor {
         const toolResults: ToolExecutionResult[] = []
 
         for (const call of toolCalls) {
-            const tool = this.tools.get(call.toolName)
+            let tool = this.tools.get(call.toolName)
+            if (!tool && this.onMissingTool) {
+                try {
+                    const fallback = await this.onMissingTool(call.toolName, call.parameters, context)
+                    if (fallback) {
+                        if ('isError' in fallback && typeof fallback.isError === 'boolean') {
+                            toolResults.push(fallback as ToolExecutionResult)
+                            continue
+                        }
+                        if ('execute' in fallback && typeof (fallback as any).execute === 'function') {
+                            tool = fallback as ToolDefinition
+                            this.registerTool(tool)
+                        }
+                    }
+                } catch (err) {
+                    toolResults.push({
+                        callId: call.callId,
+                        toolName: call.toolName,
+                        isError: true,
+                        error: `Error in onMissingTool handler for "${call.toolName}": ${err instanceof Error ? err.message : String(err)}`,
+                    })
+                    continue
+                }
+            }
+
             if (!tool) {
                 toolResults.push({
                     callId: call.callId,

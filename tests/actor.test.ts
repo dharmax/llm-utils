@@ -222,6 +222,36 @@ test('LLMActor handles unregistered tool gracefully', async () => {
     expect(result.record.toolResults[0].error).toMatch(/not registered/)
 })
 
+test('LLMActor delegates to onMissingTool when tool is not registered', async () => {
+    const asker = createMockAsker([
+        {
+            thought: 'Call dynamic tool.',
+            action: 'tool_call',
+            toolCalls: [
+                {callId: 'c1', name: 'dynamicFilter', parameters: {limit: 5}},
+            ],
+        },
+    ])
+
+    const actor = new LLMActor(asker, {
+        onMissingTool: (toolName, params) => {
+            if (toolName === 'dynamicFilter') {
+                return {
+                    callId: 'c1',
+                    toolName,
+                    isError: false,
+                    result: {filteredCount: params.limit},
+                }
+            }
+            return undefined
+        },
+    })
+
+    const result = await actor.step('Call dynamic')
+    expect(result.record.toolResults[0].isError).toBe(false)
+    expect((result.record.toolResults[0].result as any).filteredCount).toBe(5)
+})
+
 test('LLMActor.run halts with max_steps_exceeded when budget is exhausted', async () => {
     const asker = createMockAsker([
         {
