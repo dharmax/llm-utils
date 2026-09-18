@@ -124,6 +124,8 @@ export function normalizeToolParameters(params: Record<string, unknown>, schema:
                     } else if (firstVal === null || firstVal === undefined || firstVal === '') {
                         normalized[key] = keys[0]
                     }
+                } else if (values.length === 0) {
+                    delete normalized[key]
                 }
             }
         }
