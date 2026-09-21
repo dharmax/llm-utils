@@ -2,12 +2,23 @@
 
 `LLMPipeline` remains linear by default. Set `onTransition` only for conditional stage scheduling. The callback runs after each resolved stage, including a stage skipped or substituted through `onException`; an unrecovered failure still aborts via the existing exception path.
 
+The callback receives the **complete plan** (IDs, descriptions, tool assignments, and dependencies). For a ready-to-use list of currently valid destinations, use `availableTransitionTargets(context)`: it returns `{id, description}[]` and excludes stages with unsatisfied prerequisites, including those invalidated by a backward jump. The original `plan.steps` remains available when explaining why a stage is blocked. The pipeline independently validates every `goto`; the helper is for discovery, not authorization.
+
 ```ts
+import {LLMPipeline, availableTransitionTargets} from '@dharmax/llm-utils'
+
 const pipeline = new LLMPipeline(asker, {
   tools,
   onException: recoverUnexpectedFailure,
   maxStageExecutions: 20,
-  onTransition: ({step, result, history, outcome}) => {
+  onTransition: context => {
+    const {step, result, history, outcome} = context
+    const targets = availableTransitionTargets(context)
+    const goto = (id: string) => {
+      if (!targets.some(target => target.id === id))
+        return {action: 'abort' as const, reason: `Stage ${id} is not reachable`}
+      return {action: 'goto' as const, stepId: id}
+    }
     if (outcome !== 'completed')
       return {action: 'abort', reason: 'Required inspection did not complete'}
 
@@ -16,14 +27,14 @@ const pipeline = new LLMPipeline(asker, {
         if (!observedRequiredData(result))
           return {action: 'retry', wisdom: 'Gather the missing observations'}
         switch (classifyObservedPressure(result)) {
-          case 'memory': return {action: 'goto', stepId: 'inspect_memory'}
-          case 'cpu': return {action: 'goto', stepId: 'inspect_cpu'}
-          default: return {action: 'goto', stepId: 'collect_more'}
+          case 'memory': return goto('inspect_memory')
+          case 'cpu': return goto('inspect_cpu')
+          default: return goto('collect_more')
         }
       case 'inspect_memory':
       case 'inspect_cpu':
       case 'collect_more':
-        return {action: 'goto', stepId: 'report'}
+        return goto('report')
       case 'report':
         if (!taskRequirementsSatisfied(history))
           return {action: 'abort', reason: 'Required observations are missing'}
