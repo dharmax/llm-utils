@@ -1,13 +1,16 @@
 # Optional pipeline transitions
 
-`LLMPipeline` remains linear by default. Set `onTransition` only when a task needs conditional stage scheduling. Its callback runs **after a successfully resolved stage**; ordinary tool/actor failures still use the existing `onException` callback.
+`LLMPipeline` remains linear by default. Set `onTransition` only when a task needs conditional stage scheduling. The callback runs after **each resolved stage**, including stages skipped or substituted through `onException`. Unhandled tool/actor failures still use `onException` and terminate normally if unrecovered.
 
 ```ts
 const pipeline = new LLMPipeline(asker, {
   tools,
   onException: recoverUnexpectedFailure,
   maxStageExecutions: 20,
-  onTransition: ({step, result, history}) => {
+  onTransition: ({step, result, history, outcome}) => {
+    if (outcome !== 'completed')
+      return {action: 'abort', reason: 'Required inspection did not complete'}
+
     // Interpret real tool observations, not the actor's final prose alone.
     switch (step.id) {
       case 'inspect':
@@ -29,10 +32,10 @@ const pipeline = new LLMPipeline(asker, {
 })
 ```
 
-The transition decision is `next` (or `undefined`, preserving the sequential default), `goto` (an existing stage ID), `retry` (current stage, optionally with corrective wisdom) or `abort`. A conventional indexed `for` loop and a `switch` perform scheduling. There is no generated code or separate state-machine runtime.
+Transitions are `next` (or `undefined` on a successfully completed stage), `goto` to an existing stage ID, `retry` the current stage with optional corrective wisdom, and `abort`. A conventional indexed `for` loop and `switch` perform scheduling; there is no second workflow engine.
 
-The optional callback sees the actor's complete `result` (including tool observations), chronological `history` (preserved across loops), the current output snapshot, intent and plan. The normal `stepOutputs` and `phaseTraces` remain compatible but contain the latest execution for a repeated step. The next actor sees its declared dependency outputs and, in transition mode, the immediately preceding completed stage's summary.
+The callback sees the actor's complete `result`, actual stage `outcome`, chronological `history` retained across loops, current output snapshot, intent and plan. Existing `stepOutputs` and `phaseTraces` remain compatible but represent the latest execution of repeated stages. The next actor receives declared dependencies and the preceding *still-valid* completed stage's summary.
 
-When transitions are enabled, destinations must exist, IDs must be unique, declared prerequisites must have succeeded, backward jumps invalidate results from the target onward, and a total execution budget prevents infinite loops. A rejected apparent completion can return `retry`, which counts against retry and stage budgets. Each re-execution is a fresh tool invocation: applications must prevent automatic repetition of potentially mutating commands whose effects are uncertain.
+In transition mode, IDs must be unique, destinations registered, declared prerequisites successfully completed, backward jumps invalidate outputs from their target onward, and a total stage-execution budget bounds loops. Skipped or substituted stages require an explicit transition decision; they never automatically satisfy declared prerequisites. A rejected apparent completion can return `retry`, subject to retry and stage budgets.
 
-**Limits:** the callback schedules only stages already present in the plan. It cannot amend the user's requirements, confer authorization, or prove completion by itself. An application's callback must verify the outcome and choose `abort` or `retry` rather than silently accepting a model's claim. `onException` remains responsible for actual failures; a skipped/fallback stage is not treated as a successfully completed prerequisite in transition mode. For branch joins, declare only prerequisites common to every possible incoming path.
+**Application responsibilities:** the callback chooses only among planned stages. It cannot amend user requirements, confer authorization, or independently prove success. Verify observations and final task obligations before accepting completion. Re-executions are fresh tool invocations; the host must prohibit automatic repetition of potentially mutating operations with uncertain effects. For branch joins, declare only prerequisites common to each incoming path. The original `onException` remains responsible for unexpected failures.
