@@ -4,7 +4,7 @@ import {LLMPipeline, type Asker, type PlanStep, z} from '../src/index.ts'
 const tool = {name: 'inspect', description: 'Observe a value', parameters: z.object({}), execute: () => ({value: 1})}
 const stage = (id: string, dependsOn?: string[]): PlanStep => ({id, description: id, dependsOn, assignedTools: ['inspect']})
 
-function pipeline(steps: PlanStep[], asker: Asker, onException?: (exception: any) => {action: 'skip'}) {
+function pipeline(steps: PlanStep[], asker: Asker, onException?: () => {action: 'skip'}) {
     return new LLMPipeline(asker, {
         tools: [tool], onException,
         preprocessor: {async preprocess(goal) {
@@ -14,7 +14,7 @@ function pipeline(steps: PlanStep[], asker: Asker, onException?: (exception: any
     })
 }
 
-test('a skipped stage requires an explicit transition decision', async () => {
+test('a skipped stage requires an explicit decision and cannot silently succeed', async () => {
     const asker = {
         json: async () => ({ok: true, data: {thought: 'broken', action: 'tool_call',
             toolCalls: [{name: 'missing_tool', parameters: {}}]}}),
@@ -25,12 +25,13 @@ test('a skipped stage requires an explicit transition decision', async () => {
     expect(rejected.ok).toBe(false)
     expect(rejected.error).toContain('explicitly resolve skipped')
 
-    const accepted = await build().run('Inspect', {onTransition: ({outcome}) => {
+    const advanced = await build().run('Inspect', {onTransition: ({outcome}) => {
         expect(outcome).toBe('skipped')
         return {action: 'next'}
     }})
-    expect(accepted.ok).toBe(true)
-    expect(accepted.executionHistory?.[0]?.outcome).toBe('skipped')
+    expect(advanced.ok).toBe(false)
+    expect(advanced.error).toContain('Unresolved skipped or substituted')
+    expect(advanced.executionHistory?.[0]?.outcome).toBe('skipped')
 })
 
 test('a skipped prerequisite cannot satisfy dependent work', async () => {
