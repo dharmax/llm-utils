@@ -73,7 +73,7 @@ export type PipelineExceptionHandler = (
     exception: PipelineStepException,
 ) => Promise<PipelineExceptionResolution | void> | PipelineExceptionResolution | void
 
-/** Actual stage executions, including repeated visits; unlike stepOutputs, this is chronological. */
+/** Each visit is retained in execution order, including invalidated visits. */
 export interface StageExecution {
     stepId: string
     result: ActorRunResult
@@ -81,7 +81,7 @@ export interface StageExecution {
     outcome: 'completed' | 'skipped' | 'continued'
 }
 
-/** Only the host's callback chooses branches. These decisions never confer tool permissions. */
+/** Application-controlled transitions; the pipeline validates their mechanics. */
 export type PipelineTransition =
     | {action: 'next'}
     | {action: 'goto'; stepId: string}
@@ -89,9 +89,9 @@ export type PipelineTransition =
     | {action: 'abort'; reason?: string}
 
 export interface PipelineTransitionContext {
+    goal: string
     step: PlanStep
     result: ActorRunResult
-    /** This stage's actual outcome, not merely the actor's text. */
     outcome: StageExecution['outcome']
     history: ReadonlyArray<Readonly<StageExecution>>
     stepOutputs: Readonly<Record<string, string>>
@@ -112,7 +112,7 @@ export interface PipelineRunResult<T = unknown> {
     phaseTraces: Record<string, ActorStepRecord[]>
     stepOutputs: Record<string, string>
     error?: string
-    /** Present when conditional execution is enabled. */
+    /** Present only for conditional execution; includes previous loop iterations. */
     executionHistory?: StageExecution[]
 }
 
@@ -127,13 +127,11 @@ export interface PipelineOptions {
     autoWisdom?: boolean
     maxStepRetries?: number
     throwOnError?: boolean
-    /** Optional. With no callback the original sequential behavior is retained. */
     onTransition?: PipelineTransitionHandler
-    /** Total stage visits (including loops and transition retries) when onTransition is used. */
     maxStageExecutions?: number
 }
 
-/** Preprocess -> Plan -> Scoped LLMActors -> Synthesize; optional conditional transitions. */
+/** Preprocess -> Plan -> Scoped LLMActors -> Synthesize; optional stage transitions. */
 export class LLMPipeline {
     private readonly tools = new Map<string, ToolDefinition>()
     private readonly maxStepsPerPhase: number
@@ -239,6 +237,7 @@ Output an ordered execution plan with step IDs and dependencies.`
         const phaseTraces: Record<string, ActorStepRecord[]> = {}
         const history: StageExecution[] = []
         const completed = new Set<string>()
+        const unresolved = new Set<string>()
         let executions = 0
         let transitionRetries = 0
         let retryWisdom = ''
@@ -247,18 +246,32 @@ Output an ordered execution plan with step IDs and dependencies.`
             return {ok: false, finalText: '', intent, plan, phaseTraces, stepOutputs,
                 executionHistory: transition ? [...history] : undefined, error: reason}
         }
+        const invalidateFrom = (index: number): void => {
+            for (let j = index; j < plan.steps.length; j++) {
+                const id = plan.steps[j]!.id
+                delete stepOutputs[id]
+                completed.delete(id)
+                unresolved.delete(id)
+            }
+        }
 
         if (transition) {
             if (!Number.isSafeInteger(budget) || budget < 1) return fail('maxStageExecutions must be a positive integer')
             if (!plan.steps.length) return fail('Branching plan contains no stages')
             if (stepIndices!.size !== plan.steps.length) return fail('Branching plan contains duplicate stage IDs')
+            for (const step of plan.steps) {
+                if ((step.dependsOn ?? []).some(id => !stepIndices!.has(id)))
+                    return fail(`Stage ${step.id} has an unknown dependency`)
+            }
         }
         await this.onPhaseChange?.('execute', {plan})
 
-        // The index changes only on an explicit callback transition; increment remains native to for.
-        for (let i = 0; i < plan.steps.length; i++) {
-            if (options.signal?.aborted) return this.makeAbortResult(intent, plan, phaseTraces, stepOutputs)
-            const step = plan.steps[i]!
+        // The cursor has a single owner: switch(decision.action). No implicit increment.
+        let cursor = 0
+        while (cursor < plan.steps.length) {
+            if (options.signal?.aborted)
+                return this.makeAbortResult(intent, plan, phaseTraces, stepOutputs, transition ? history : undefined)
+            const step = plan.steps[cursor]!
             if (transition) {
                 if (++executions > budget) return fail(`Stage execution budget exceeded (${budget})`)
                 const missing = (step.dependsOn ?? []).filter(id => !completed.has(id))
@@ -272,7 +285,6 @@ Output an ordered execution plan with step IDs and dependencies.`
                     .map(id => `[Result of ${id}]: ${stepOutputs[id]}`).join('\n')
                 if (deps) prereqContext = `\nPrerequisite Context:\n${deps}\n`
             }
-            // A backward jump invalidates completed results; never inject stale previous-stage context.
             const previous = transition ? history.at(-1) : undefined
             if (previous?.outcome === 'completed' && completed.has(previous.stepId) &&
                 !(step.dependsOn ?? []).includes(previous.stepId))
@@ -310,7 +322,8 @@ Output an ordered execution plan with step IDs and dependencies.`
             }
 
             while (isStepException(stepResult)) {
-                if (options.signal?.aborted) return this.makeAbortResult(intent, plan, phaseTraces, stepOutputs)
+                if (options.signal?.aborted)
+                    return this.makeAbortResult(intent, plan, phaseTraces, stepOutputs, transition ? history : undefined)
                 const stepError = getStepError(stepResult)
                 const exception: PipelineStepException = {
                     step, error: stepError, stepResult, stepOutputs, intent, plan, attempt: attempts,
@@ -358,7 +371,8 @@ Provide a single concise corrective instruction ("wisdom") for how to format par
                 }
                 if (resolution.action === 'retry') {
                     attempts += 1
-                    if (attempts > maxRetries + 1) return fail(`Step ${step.id} failed after ${attempts - 1} retry attempts: ${stepError}`)
+                    if (attempts > maxRetries + 1)
+                        return fail(`Step ${step.id} failed after ${attempts - 1} retry attempts: ${stepError}`)
                     const correctiveContext = resolution.wisdom
                         ? `\nCorrective Guidance / Wisdom:\n${resolution.wisdom}\n` : ''
                     const retryTools = resolution.assignedTools?.length
@@ -375,51 +389,55 @@ Provide a single concise corrective instruction ("wisdom") for how to format par
                 phaseTraces[step.id] = stepResult.steps
                 stepOutputs[step.id] = stepResult.finalText || 'Completed'
                 completed.add(step.id)
+                unresolved.delete(step.id)
+            } else if (transition) {
+                completed.delete(step.id)
+                unresolved.add(step.id)
             }
             if (transition) history.push({stepId: step.id, result: stepResult,
                 output: stepOutputs[step.id] ?? '', outcome})
             await this.onPhaseChange?.('step_end', {step, result: stepResult})
 
-            if (!transition) continue
-            if (options.signal?.aborted) return this.makeAbortResult(intent, plan, phaseTraces, stepOutputs)
+            if (!transition) {
+                cursor++
+                continue
+            }
+            if (options.signal?.aborted)
+                return this.makeAbortResult(intent, plan, phaseTraces, stepOutputs, history)
             let decision: PipelineTransition | void
             try {
-                decision = await transition({step, result: stepResult, outcome,
+                decision = await transition({goal: rawGoal, step, result: stepResult, outcome,
                     history: history.slice(), stepOutputs: {...stepOutputs}, intent, plan})
             } catch (error) {
                 return fail(`Transition callback failed: ${error instanceof Error ? error.message : String(error)}`)
             }
-            // Substituted or skipped work requires an explicit host decision to proceed.
             if (outcome !== 'completed' && !decision)
                 return fail(`Transition must explicitly resolve ${outcome} stage ${step.id}`)
             switch (decision?.action) {
                 case undefined:
                 case 'next':
                     transitionRetries = 0
+                    cursor++
                     break
                 case 'abort':
                     return fail(decision.reason || `Transition aborted after ${step.id}`)
                 case 'retry':
-                    if (++transitionRetries > maxRetries) return fail(`Transition retries exhausted for ${step.id}`)
-                    delete stepOutputs[step.id]
-                    completed.delete(step.id)
+                    if (++transitionRetries > maxRetries)
+                        return fail(`Transition retries exhausted for ${step.id}`)
+                    invalidateFrom(cursor)
                     retryWisdom = decision.wisdom ?? ''
-                    i--
                     break
                 case 'goto': {
                     transitionRetries = 0
                     const target = stepIndices!.get(decision.stepId)
                     if (target === undefined) return fail(`Unknown transition target: ${decision.stepId}`)
-                    if (target <= i) {
-                        // Each loop iteration starts fresh from its target; history retains earlier observations.
-                        for (let j = target; j < plan.steps.length; j++) {
-                            delete stepOutputs[plan.steps[j]!.id]
-                            completed.delete(plan.steps[j]!.id)
-                        }
-                    }
+                    // A revisited stage and all its downstream results must be recomputed.
+                    if (target <= cursor || completed.has(decision.stepId) || unresolved.has(decision.stepId))
+                        invalidateFrom(target)
                     const missing = (plan.steps[target]!.dependsOn ?? []).filter(id => !completed.has(id))
-                    if (missing.length) return fail(`Transition to ${decision.stepId} has unsatisfied dependencies: ${missing.join(', ')}`)
-                    i = target - 1 // for increments to exactly target
+                    if (missing.length)
+                        return fail(`Transition to ${decision.stepId} has unsatisfied dependencies: ${missing.join(', ')}`)
+                    cursor = target
                     break
                 }
                 default:
@@ -427,6 +445,8 @@ Provide a single concise corrective instruction ("wisdom") for how to format par
             }
         }
 
+        if (transition && unresolved.size)
+            return fail(`Unresolved skipped or substituted stages: ${[...unresolved].join(', ')}`)
         await this.onPhaseChange?.('verify', {stepOutputs})
         const synthesisPrompt = `Original Goal: ${rawGoal}
 Constraints: ${intent.constraints.join(', ') || 'None'}
@@ -453,8 +473,9 @@ Synthesize the final, verified response to the user's original goal, ensuring al
 
     private makeAbortResult<T>(intent: PreprocessedIntent, plan: ExecutionPlan,
         phaseTraces: Record<string, ActorStepRecord[]> = {},
-        stepOutputs: Record<string, string> = {}): PipelineRunResult<T> {
+        stepOutputs: Record<string, string> = {}, history?: StageExecution[]): PipelineRunResult<T> {
         return {ok: false, finalText: '', intent, plan, phaseTraces, stepOutputs,
+            executionHistory: history ? [...history] : undefined,
             error: 'Pipeline execution aborted by signal.'}
     }
 }
