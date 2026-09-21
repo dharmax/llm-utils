@@ -276,50 +276,83 @@ test('Live Ollama: LLMPipeline intercepts failure and completes task using onExc
         return
     }
 
-    const asker = new Asker({
+    const realAsker = new Asker({
         providers: {
             ollama: {id: 'ollama', host: ollamaHost, available: true},
         },
         defaultModel: `ollama/${testModel}`,
     })
 
+    let forcedCalls = 0
     let wisdomInjected = false
-
-    const tools = [
-        {
-            name: 'get_server_metrics',
-            description: 'Returns telemetry metrics for a named server instance',
-            parameters: z.object({
-                serverId: z.string().describe('Server hostname'),
-                apiToken: z.string().optional().describe('Authentication token'),
-            }),
-            execute: ({serverId, apiToken}: {serverId: string; apiToken?: string}) => {
-                if (apiToken !== 'SECRET_TOKEN_789') {
-                    throw new Error('Unauthorized: valid apiToken is required')
-                }
-                return {serverId, uptimeDays: 142, loadAvg: 0.42}
-            },
+    let authenticatedToolExecuted = false
+    // Force a genuine failing first actor run. Otherwise the live model might
+    // finish without calling the tool, or recover internally without onException.
+    // Only the recovery and synthesis use actual Ollama generations.
+    const asker = {
+        json: async (prompt: string, schema: any, options?: any) => {
+            if (prompt.startsWith('## Goal\n') && forcedCalls < 3) {
+                forcedCalls++
+                return {ok: true, data: {
+                    thought: 'Attempt unauthenticated metrics call', action: 'tool_call',
+                    toolCalls: [{name: 'get_server_metrics', parameters: {serverId: 'omega'}}]
+                }}
+            }
+            return realAsker.json(prompt, schema, options)
         },
-    ]
+        ask: realAsker.ask.bind(realAsker),
+    } as unknown as Asker
+
+    const tools = [{
+        name: 'get_server_metrics',
+        description: 'Returns telemetry metrics for a named server instance',
+        parameters: z.object({
+            serverId: z.string().describe('Server hostname'),
+            apiToken: z.string().optional().describe('Authentication token'),
+        }),
+        execute: ({serverId, apiToken}: {serverId: string; apiToken?: string}) => {
+            if (apiToken !== 'SECRET_TOKEN_789')
+                throw new Error('Unauthorized: valid apiToken is required')
+            authenticatedToolExecuted = true
+            return {serverId, uptimeDays: 142, loadAvg: 0.42}
+        },
+    }]
 
     const pipeline = new LLMPipeline(asker, {
         tools,
         maxStepsPerPhase: 3,
-        onException: (exc) => {
+        maxStepRetries: 1,
+        preprocessor: {
+            async preprocess(goal) {
+                return {normalizedGoal: goal, constraints: [],
+                    relevantTools: ['get_server_metrics'], suggestedPhases: ['metrics']}
+            },
+        },
+        planner: {
+            async plan() {
+                return {strategy: 'Fetch server metrics', steps: [{
+                    id: 'metrics', description: 'Get metrics for server omega and report uptimeDays',
+                    assignedTools: ['get_server_metrics']
+                }]}
+            },
+        },
+        onException: () => {
             wisdomInjected = true
-            return {
-                action: 'retry',
-                wisdom: 'Authentication required. Call get_server_metrics with serverId "omega" and apiToken "SECRET_TOKEN_789".',
-            }
+            return {action: 'retry', wisdom:
+                'Authentication required. Call get_server_metrics with serverId "omega" and apiToken "SECRET_TOKEN_789".'}
         },
     })
 
     const goal = 'Get metrics for server "omega" using get_server_metrics and report its uptimeDays.'
     const result = await pipeline.run(goal)
 
+    if (!result.ok || !authenticatedToolExecuted || !result.finalText.includes('142'))
+        console.error('Live recovery details:', JSON.stringify({error: result.error,
+            forcedCalls, wisdomInjected, authenticatedToolExecuted, phaseTraces: result.phaseTraces,
+            finalText: result.finalText}))
+    expect(forcedCalls).toBe(3)
     expect(wisdomInjected).toBe(true)
+    expect(authenticatedToolExecuted).toBe(true)
     expect(result.ok).toBe(true)
     expect(result.finalText).toContain('142')
 }, 90000)
-
-
