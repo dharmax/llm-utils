@@ -3,9 +3,7 @@ import {LLMActor, type ActorRunResult, type ActorStepRecord, type ToolDefinition
 import type {Asker} from './asker.ts'
 import type {AskOptions} from './types.ts'
 
-/**
- * Phase 1: Preprocessed user intent and extracted constraints.
- */
+/** Phase 1: Preprocessed user intent and extracted constraints. */
 export interface PreprocessedIntent {
     normalizedGoal: string
     domain?: string
@@ -22,9 +20,7 @@ export const PreprocessedIntentSchema = z.object({
     suggestedPhases: z.array(z.string()).default([]).describe('Logical stages required to complete the task'),
 })
 
-/**
- * Phase 2: Planned step with dependencies.
- */
+/** Phase 2: Planned step with dependencies. */
 export interface PlanStep {
     id: string
     description: string
@@ -47,9 +43,7 @@ export const ExecutionPlanSchema = z.object({
     })).describe('Ordered list of steps to execute'),
 })
 
-/**
- * Service Adapter interfaces for pluggability (e.g. from @dharmax/text-compiler or custom heuristics).
- */
+/** Service Adapter interfaces for pluggability. */
 export interface IntentPreprocessorAdapter {
     preprocess(goal: string, tools: ToolDefinition[], options?: AskOptions): Promise<PreprocessedIntent>
 }
@@ -58,9 +52,6 @@ export interface TaskPlannerAdapter {
     plan(intent: PreprocessedIntent, tools: ToolDefinition[], options?: AskOptions): Promise<ExecutionPlan>
 }
 
-/**
- * Exception context passed when a pipeline step fails.
- */
 export interface PipelineStepException {
     step: PlanStep
     error: string
@@ -71,38 +62,47 @@ export interface PipelineStepException {
     attempt: number
 }
 
-/**
- * Resolution returned by an exception handler callback to inject wisdom or steer execution.
- */
+/** Existing exception handler remains unchanged. */
 export type PipelineExceptionResolution =
-    | {
-          action: 'retry'
-          /** Optional corrective guidance / wisdom injected into the step prompt */
-          wisdom?: string
-          /** Optional tool overrides for the retry */
-          assignedTools?: string[]
-      }
-    | {
-          action: 'continue'
-          /** Fallback output recorded as step result */
-          fallbackOutput: string
-      }
-    | {
-          action: 'skip'
-      }
-    | {
-          action: 'abort'
-          /** Optional reason explaining the abort */
-          reason?: string
-      }
+    | {action: 'retry'; wisdom?: string; assignedTools?: string[]}
+    | {action: 'continue'; fallbackOutput: string}
+    | {action: 'skip'}
+    | {action: 'abort'; reason?: string}
 
 export type PipelineExceptionHandler = (
     exception: PipelineStepException,
 ) => Promise<PipelineExceptionResolution | void> | PipelineExceptionResolution | void
 
-/**
- * Result of multi-phase pipeline execution.
- */
+/** Each visit is retained in execution order, including invalidated visits. */
+export interface StageExecution {
+    stepId: string
+    result: ActorRunResult
+    output: string
+    outcome: 'completed' | 'skipped' | 'continued'
+}
+
+/** Application-controlled transitions; the pipeline validates their mechanics. */
+export type PipelineTransition =
+    | {action: 'next'}
+    | {action: 'goto'; stepId: string}
+    | {action: 'retry'; wisdom?: string}
+    | {action: 'abort'; reason?: string}
+
+export interface PipelineTransitionContext {
+    goal: string
+    step: PlanStep
+    result: ActorRunResult
+    outcome: StageExecution['outcome']
+    history: ReadonlyArray<Readonly<StageExecution>>
+    stepOutputs: Readonly<Record<string, string>>
+    intent: PreprocessedIntent
+    plan: ExecutionPlan
+}
+
+export type PipelineTransitionHandler = (
+    context: PipelineTransitionContext,
+) => PipelineTransition | void | Promise<PipelineTransition | void>
+
 export interface PipelineRunResult<T = unknown> {
     ok: boolean
     finalText: string
@@ -112,6 +112,8 @@ export interface PipelineRunResult<T = unknown> {
     phaseTraces: Record<string, ActorStepRecord[]>
     stepOutputs: Record<string, string>
     error?: string
+    /** Present only for conditional execution; includes previous loop iterations. */
+    executionHistory?: StageExecution[]
 }
 
 export interface PipelineOptions {
@@ -125,31 +127,26 @@ export interface PipelineOptions {
     autoWisdom?: boolean
     maxStepRetries?: number
     throwOnError?: boolean
+    onTransition?: PipelineTransitionHandler
+    maxStageExecutions?: number
 }
 
-/**
- * Multi-Phase Agent Pipeline:
- * Phase 1: Intent Preprocessing & Constraint Extraction
- * Phase 2: Task Decomposition & Dependency Planning
- * Phase 3: Phased Tool Execution (with Dependency Memory)
- * Phase 4: Constraint Verification & Final Synthesis
- */
+/** Preprocess -> Plan -> Scoped LLMActors -> Synthesize; optional stage transitions. */
 export class LLMPipeline {
     private readonly tools = new Map<string, ToolDefinition>()
     private readonly maxStepsPerPhase: number
     private readonly askOptions?: AskOptions
     private readonly preprocessor?: IntentPreprocessorAdapter
     private readonly planner?: TaskPlannerAdapter
-    private readonly onPhaseChange?: (phase: string, data?: unknown) => void | Promise<void>
+    private readonly onPhaseChange?: PipelineOptions['onPhaseChange']
     private readonly onException?: PipelineExceptionHandler
     private readonly autoWisdom: boolean
     private readonly maxStepRetries: number
     private readonly throwOnError: boolean
+    private readonly onTransition?: PipelineTransitionHandler
+    private readonly maxStageExecutions?: number
 
-    constructor(
-        private readonly asker: Asker,
-        options: PipelineOptions = {},
-    ) {
+    constructor(private readonly asker: Asker, options: PipelineOptions = {}) {
         this.maxStepsPerPhase = options.maxStepsPerPhase ?? 4
         this.askOptions = options.askOptions
         this.preprocessor = options.preprocessor
@@ -159,9 +156,9 @@ export class LLMPipeline {
         this.autoWisdom = Boolean(options.autoWisdom)
         this.maxStepRetries = options.maxStepRetries ?? 2
         this.throwOnError = Boolean(options.throwOnError)
-
-        for (const tool of options.tools ?? [])
-            this.tools.set(tool.name, tool)
+        this.onTransition = options.onTransition
+        this.maxStageExecutions = options.maxStageExecutions
+        for (const tool of options.tools ?? []) this.tools.set(tool.name, tool)
     }
 
     registerTool(tool: ToolDefinition): this {
@@ -173,15 +170,9 @@ export class LLMPipeline {
         return [...this.tools.values()]
     }
 
-    /**
-     * Phase 1: Preprocess raw intent and extract explicit constraints.
-     */
     async preprocess(goal: string, options?: AskOptions): Promise<PreprocessedIntent> {
         await this.onPhaseChange?.('preprocess', {goal})
-
-        if (this.preprocessor) {
-            return this.preprocessor.preprocess(goal, this.getTools(), options)
-        }
+        if (this.preprocessor) return this.preprocessor.preprocess(goal, this.getTools(), options)
 
         const toolCatalog = [...this.tools.values()].map(t => `- ${t.name}: ${t.description}`).join('\n')
         const prompt = `Analyze this user goal and extract clear operational constraints and tool requirements.
@@ -191,33 +182,18 @@ ${toolCatalog || 'None'}
 
 Goal:
 ${goal}`
-
         const res = await this.asker.json(prompt, PreprocessedIntentSchema, {
             ...this.askOptions,
             ...options,
             system: 'You are an intent preprocessor. Clarify goals, extract constraints, and determine needed tools.',
         })
-
-        if (res.ok && res.data)
-            return res.data
-
-        return {
-            normalizedGoal: goal,
-            constraints: [],
-            relevantTools: [...this.tools.keys()],
-            suggestedPhases: ['execution'],
-        }
+        if (res.ok && res.data) return res.data
+        return {normalizedGoal: goal, constraints: [], relevantTools: [...this.tools.keys()], suggestedPhases: ['execution']}
     }
 
-    /**
-     * Phase 2: Decompose goal into an ordered execution plan with dependencies.
-     */
     async plan(intent: PreprocessedIntent, options?: AskOptions): Promise<ExecutionPlan> {
         await this.onPhaseChange?.('plan', {intent})
-
-        if (this.planner) {
-            return this.planner.plan(intent, this.getTools(), options)
-        }
+        if (this.planner) return this.planner.plan(intent, this.getTools(), options)
 
         const toolCatalog = [...this.tools.values()].map(t => `- ${t.name}: ${t.description}`).join('\n')
         const prompt = `Decompose this normalized goal into a concise, ordered plan of sequential or dependent sub-tasks.
@@ -228,135 +204,135 @@ Available Tools:
 ${toolCatalog}
 
 Output an ordered execution plan with step IDs and dependencies.`
-
         const res = await this.asker.json(prompt, ExecutionPlanSchema, {
             ...this.askOptions,
             ...options,
             system: 'You are a task planner. Create clean, atomic, minimal execution steps with step IDs (step_1, step_2).',
         })
-
-        if (res.ok && res.data && res.data.steps.length > 0)
-            return res.data
-
-        return {
-            strategy: 'Direct execution',
-            steps: [{
-                id: 'step_1',
-                description: intent.normalizedGoal,
-                assignedTools: intent.relevantTools,
-            }],
-        }
+        if (res.ok && res.data && res.data.steps.length > 0) return res.data
+        return {strategy: 'Direct execution', steps: [{id: 'step_1', description: intent.normalizedGoal, assignedTools: intent.relevantTools}]}
     }
 
-    /**
-     * Complete multi-phase execution loop.
-     */
-    async run<T = unknown>(
-        rawGoal: string,
-        options: {
-            schema?: ZodType<T>
-            askOptions?: AskOptions
-            signal?: AbortSignal
-            onException?: PipelineExceptionHandler
-            autoWisdom?: boolean
-            maxStepRetries?: number
-            throwOnError?: boolean
-        } = {},
-    ): Promise<PipelineRunResult<T>> {
+    async run<T = unknown>(rawGoal: string, options: {
+        schema?: ZodType<T>
+        askOptions?: AskOptions
+        signal?: AbortSignal
+        onException?: PipelineExceptionHandler
+        autoWisdom?: boolean
+        maxStepRetries?: number
+        throwOnError?: boolean
+        onTransition?: PipelineTransitionHandler
+        maxStageExecutions?: number
+    } = {}): Promise<PipelineRunResult<T>> {
         const throwOnError = options.throwOnError ?? this.throwOnError
-
-        // 1. Preprocess
         const intent = await this.preprocess(rawGoal, options.askOptions)
-        if (options.signal?.aborted) {
-            return this.makeAbortResult(intent, {strategy: 'aborted', steps: []})
-        }
-
-        // 2. Plan
+        if (options.signal?.aborted) return this.makeAbortResult(intent, {strategy: 'aborted', steps: []})
         const plan = await this.plan(intent, options.askOptions)
-        if (options.signal?.aborted) {
-            return this.makeAbortResult(intent, plan)
-        }
+        if (options.signal?.aborted) return this.makeAbortResult(intent, plan)
 
-        // 3. Phased Execution (Happy Path with Exception Wisdom)
-        await this.onPhaseChange?.('execute', {plan})
+        const transition = options.onTransition ?? this.onTransition
+        const budget = options.maxStageExecutions ?? this.maxStageExecutions ?? Math.max(16, plan.steps.length * 4)
+        const stepIndices = transition ? new Map(plan.steps.map((step, index) => [step.id, index])) : undefined
         const stepOutputs: Record<string, string> = {}
         const phaseTraces: Record<string, ActorStepRecord[]> = {}
-
-        for (const step of plan.steps) {
-            if (options.signal?.aborted) {
-                return this.makeAbortResult(intent, plan, phaseTraces, stepOutputs)
+        const history: StageExecution[] = []
+        const completed = new Set<string>()
+        const unresolved = new Set<string>()
+        let executions = 0
+        let transitionRetries = 0
+        let retryWisdom = ''
+        const fail = (reason: string): PipelineRunResult<T> => {
+            if (throwOnError) throw new Error(reason)
+            return {ok: false, finalText: '', intent, plan, phaseTraces, stepOutputs,
+                executionHistory: transition ? [...history] : undefined, error: reason}
+        }
+        const invalidateFrom = (index: number): void => {
+            for (let j = index; j < plan.steps.length; j++) {
+                const id = plan.steps[j]!.id
+                delete stepOutputs[id]
+                completed.delete(id)
+                unresolved.delete(id)
             }
+        }
 
+        if (transition) {
+            if (!Number.isSafeInteger(budget) || budget < 1) return fail('maxStageExecutions must be a positive integer')
+            if (!plan.steps.length) return fail('Branching plan contains no stages')
+            if (stepIndices!.size !== plan.steps.length) return fail('Branching plan contains duplicate stage IDs')
+            for (const step of plan.steps) {
+                if ((step.dependsOn ?? []).some(id => !stepIndices!.has(id)))
+                    return fail(`Stage ${step.id} has an unknown dependency`)
+            }
+        }
+        await this.onPhaseChange?.('execute', {plan})
+
+        // The cursor has a single owner: switch(decision.action). No implicit increment.
+        let cursor = 0
+        while (cursor < plan.steps.length) {
+            if (options.signal?.aborted)
+                return this.makeAbortResult(intent, plan, phaseTraces, stepOutputs, transition ? history : undefined)
+            const step = plan.steps[cursor]!
+            if (transition) {
+                if (++executions > budget) return fail(`Stage execution budget exceeded (${budget})`)
+                const missing = (step.dependsOn ?? []).filter(id => !completed.has(id))
+                if (missing.length) return fail(`Stage ${step.id} has unsatisfied dependencies: ${missing.join(', ')}`)
+            }
             await this.onPhaseChange?.('step_start', {step})
 
-            // Gather dependencies data
             let prereqContext = ''
-            if (step.dependsOn && step.dependsOn.length > 0) {
-                const deps = step.dependsOn
-                    .filter(id => stepOutputs[id])
-                    .map(id => `[Result of ${id}]: ${stepOutputs[id]}`)
-                    .join('\n')
+            if (step.dependsOn?.length) {
+                const deps = step.dependsOn.filter(id => stepOutputs[id])
+                    .map(id => `[Result of ${id}]: ${stepOutputs[id]}`).join('\n')
                 if (deps) prereqContext = `\nPrerequisite Context:\n${deps}\n`
             }
+            const previous = transition ? history.at(-1) : undefined
+            if (previous?.outcome === 'completed' && completed.has(previous.stepId) &&
+                !(step.dependsOn ?? []).includes(previous.stepId))
+                prereqContext += `\nPrevious Stage (${previous.stepId}): ${previous.output}\n`
 
-            // Equip scoped tools (or all tools if none assigned)
             const scopedTools = step.assignedTools.length > 0
                 ? [...this.tools.values()].filter(t => step.assignedTools.includes(t.name))
                 : [...this.tools.values()]
-
-            const actor = new LLMActor(this.asker, {
-                tools: scopedTools.length > 0 ? scopedTools : [...this.tools.values()],
-                maxSteps: this.maxStepsPerPhase,
-                askOptions: {
-                    ...this.askOptions,
-                    ...options.askOptions,
-                },
+            if (step.assignedTools.some(name => !this.tools.has(name)))
+                return fail(`Stage ${step.id} refers to unavailable tools`)
+            const makeActor = (tools: ToolDefinition[]) => new LLMActor(this.asker, {
+                tools, maxSteps: this.maxStepsPerPhase,
+                askOptions: {...this.askOptions, ...options.askOptions},
             })
-
-            const subGoal = `${step.description}${prereqContext}`
-            let stepResult = await actor.run(subGoal, {
-                signal: options.signal,
-            })
-
+            let stepResult = await makeActor(scopedTools).run(
+                `${step.description}${prereqContext}${retryWisdom ? `\nCorrective Guidance / Wisdom:\n${retryWisdom}\n` : ''}`,
+                {signal: options.signal},
+            )
+            retryWisdom = ''
             let attempts = 1
             const maxRetries = options.maxStepRetries ?? this.maxStepRetries
             const exceptionHandler = options.onException ?? this.onException
             const autoWisdom = options.autoWisdom ?? this.autoWisdom
+            let outcome: StageExecution['outcome'] = 'completed'
 
             const isStepException = (res: ActorRunResult) => {
                 if (!res.ok || res.haltReason !== 'completed') return true
                 const toolResults = res.steps.flatMap(s => s.toolResults)
-                if (toolResults.length > 0 && toolResults.every(r => r.isError)) return true
-                return false
+                return toolResults.length > 0 && toolResults.every(r => r.isError)
             }
-
             const getStepError = (res: ActorRunResult) => {
                 if (res.error) return res.error
                 const toolResults = res.steps.flatMap(s => s.toolResults)
-                const lastError = toolResults.findLast(r => r.isError)?.error
-                return lastError || `Execution halted (${res.haltReason})`
+                return toolResults.findLast(r => r.isError)?.error || `Execution halted (${res.haltReason})`
             }
 
-            // When reality diverges: Handle Exception with Wisdom Callback
             while (isStepException(stepResult)) {
+                if (options.signal?.aborted)
+                    return this.makeAbortResult(intent, plan, phaseTraces, stepOutputs, transition ? history : undefined)
                 const stepError = getStepError(stepResult)
                 const exception: PipelineStepException = {
-                    step,
-                    error: stepError,
-                    stepResult,
-                    stepOutputs,
-                    intent,
-                    plan,
-                    attempt: attempts,
+                    step, error: stepError, stepResult, stepOutputs, intent, plan, attempt: attempts,
                 }
-
                 let resolution: PipelineExceptionResolution | undefined
-
                 if (exceptionHandler) {
                     const resolved = await exceptionHandler(exception)
                     if (resolved) resolution = resolved
                 } else if (autoWisdom && attempts <= maxRetries) {
-                    // Auto-critic generates corrective wisdom
                     const lastStep = stepResult.steps[stepResult.steps.length - 1]
                     const criticPrompt = `The agent encountered a failure while executing this sub-goal:
 Goal: ${step.description}
@@ -366,99 +342,111 @@ Last Observation: ${JSON.stringify(lastStep?.toolResults ?? {})}
 
 Provide a single concise corrective instruction ("wisdom") for how to format parameters or call tools correctly on retry.`
                     const critic = await this.asker.ask(criticPrompt, {
-                        ...this.askOptions,
-                        ...options.askOptions,
+                        ...this.askOptions, ...options.askOptions,
                         system: 'You are an execution critic. Output only the concrete corrective instruction.',
                         temperature: 0.2,
                     })
-                    if (critic.ok && critic.text) {
-                        resolution = {action: 'retry', wisdom: critic.text.trim()}
-                    }
+                    if (critic.ok && critic.text) resolution = {action: 'retry', wisdom: critic.text.trim()}
                 }
-
-                // If no wisdom provided or explicit abort, terminate with clear explanation
                 if (!resolution || resolution.action === 'abort') {
-                    const errorMsg = resolution?.reason || `Step ${step.id} failed: ${stepResult.error}`
+                    const errorMsg = resolution?.reason || `Step ${step.id} failed: ${stepError}`
                     phaseTraces[step.id] = stepResult.steps
                     stepOutputs[step.id] = `Failed: ${errorMsg}`
-                    if (throwOnError) {
-                        throw new Error(errorMsg)
-                    }
-                    return {
-                        ok: false,
-                        finalText: stepResult.finalText,
-                        intent,
-                        plan,
-                        phaseTraces,
-                        stepOutputs,
-                        error: errorMsg,
-                    }
+                    if (throwOnError) throw new Error(errorMsg)
+                    return {ok: false, finalText: stepResult.finalText, intent, plan,
+                        phaseTraces, stepOutputs, error: errorMsg,
+                        executionHistory: transition ? [...history] : undefined}
                 }
-
                 if (resolution.action === 'skip') {
                     stepOutputs[step.id] = 'Skipped by exception handler'
                     phaseTraces[step.id] = stepResult.steps
+                    outcome = 'skipped'
                     break
                 }
-
                 if (resolution.action === 'continue') {
                     stepOutputs[step.id] = resolution.fallbackOutput
                     phaseTraces[step.id] = stepResult.steps
+                    outcome = 'continued'
                     break
                 }
-
                 if (resolution.action === 'retry') {
                     attempts += 1
-                    if (attempts > maxRetries + 1) {
-                        const errorMsg = `Step ${step.id} failed after ${attempts - 1} retry attempts: ${stepResult.error}`
-                        phaseTraces[step.id] = stepResult.steps
-                        stepOutputs[step.id] = `Failed: ${errorMsg}`
-                        if (throwOnError) {
-                            throw new Error(errorMsg)
-                        }
-                        return {
-                            ok: false,
-                            finalText: stepResult.finalText,
-                            intent,
-                            plan,
-                            phaseTraces,
-                            stepOutputs,
-                            error: errorMsg,
-                        }
-                    }
-
+                    if (attempts > maxRetries + 1)
+                        return fail(`Step ${step.id} failed after ${attempts - 1} retry attempts: ${stepError}`)
                     const correctiveContext = resolution.wisdom
-                        ? `\nCorrective Guidance / Wisdom:\n${resolution.wisdom}\n`
-                        : ''
-                    const retryGoal = `${step.description}${prereqContext}${correctiveContext}`
-
-                    const retryTools = resolution.assignedTools && resolution.assignedTools.length > 0
+                        ? `\nCorrective Guidance / Wisdom:\n${resolution.wisdom}\n` : ''
+                    const retryTools = resolution.assignedTools?.length
                         ? [...this.tools.values()].filter(t => resolution.assignedTools!.includes(t.name))
                         : scopedTools
-
-                    const retryActor = new LLMActor(this.asker, {
-                        tools: retryTools.length > 0 ? retryTools : [...this.tools.values()],
-                        maxSteps: this.maxStepsPerPhase,
-                        askOptions: {
-                            ...this.askOptions,
-                            ...options.askOptions,
-                        },
-                    })
-
-                    stepResult = await retryActor.run(retryGoal, {signal: options.signal})
+                    if (resolution.assignedTools?.some(name => !this.tools.has(name)))
+                        return fail(`Retry for ${step.id} refers to unavailable tools`)
+                    stepResult = await makeActor(retryTools).run(`${step.description}${prereqContext}${correctiveContext}`, {signal: options.signal})
                     phaseTraces[`${step.id}_retry_${attempts - 1}`] = stepResult.steps
                 }
             }
 
-            if (!isStepException(stepResult)) {
+            if (outcome === 'completed' && !isStepException(stepResult)) {
                 phaseTraces[step.id] = stepResult.steps
                 stepOutputs[step.id] = stepResult.finalText || 'Completed'
+                completed.add(step.id)
+                unresolved.delete(step.id)
+            } else if (transition) {
+                completed.delete(step.id)
+                unresolved.add(step.id)
             }
-
+            if (transition) history.push({stepId: step.id, result: stepResult,
+                output: stepOutputs[step.id] ?? '', outcome})
             await this.onPhaseChange?.('step_end', {step, result: stepResult})
+
+            if (!transition) {
+                cursor++
+                continue
+            }
+            if (options.signal?.aborted)
+                return this.makeAbortResult(intent, plan, phaseTraces, stepOutputs, history)
+            let decision: PipelineTransition | void
+            try {
+                decision = await transition({goal: rawGoal, step, result: stepResult, outcome,
+                    history: history.slice(), stepOutputs: {...stepOutputs}, intent, plan})
+            } catch (error) {
+                return fail(`Transition callback failed: ${error instanceof Error ? error.message : String(error)}`)
+            }
+            if (outcome !== 'completed' && !decision)
+                return fail(`Transition must explicitly resolve ${outcome} stage ${step.id}`)
+            switch (decision?.action) {
+                case undefined:
+                case 'next':
+                    transitionRetries = 0
+                    cursor++
+                    break
+                case 'abort':
+                    return fail(decision.reason || `Transition aborted after ${step.id}`)
+                case 'retry':
+                    if (++transitionRetries > maxRetries)
+                        return fail(`Transition retries exhausted for ${step.id}`)
+                    invalidateFrom(cursor)
+                    retryWisdom = decision.wisdom ?? ''
+                    break
+                case 'goto': {
+                    transitionRetries = 0
+                    const target = stepIndices!.get(decision.stepId)
+                    if (target === undefined) return fail(`Unknown transition target: ${decision.stepId}`)
+                    // A revisited stage and all its downstream results must be recomputed.
+                    if (target <= cursor || completed.has(decision.stepId) || unresolved.has(decision.stepId))
+                        invalidateFrom(target)
+                    const missing = (plan.steps[target]!.dependsOn ?? []).filter(id => !completed.has(id))
+                    if (missing.length)
+                        return fail(`Transition to ${decision.stepId} has unsatisfied dependencies: ${missing.join(', ')}`)
+                    cursor = target
+                    break
+                }
+                default:
+                    return fail(`Invalid transition decision after ${step.id}`)
+            }
         }
 
-        // 4. Synthesis & Verification
+        if (transition && unresolved.size)
+            return fail(`Unresolved skipped or substituted stages: ${[...unresolved].join(', ')}`)
         await this.onPhaseChange?.('verify', {stepOutputs})
         const synthesisPrompt = `Original Goal: ${rawGoal}
 Constraints: ${intent.constraints.join(', ') || 'None'}
@@ -467,61 +455,27 @@ Execution Trace and Results:
 ${Object.entries(stepOutputs).map(([id, text]) => `### ${id}\n${text}`).join('\n\n')}
 
 Synthesize the final, verified response to the user's original goal, ensuring all requirements are fulfilled.`
-
         if (options.schema) {
             const finalJson = await this.asker.json(synthesisPrompt, options.schema, {
-                ...this.askOptions,
-                ...options.askOptions,
+                ...this.askOptions, ...options.askOptions,
             })
-            if (throwOnError && !finalJson.ok) {
-                throw new Error(finalJson.failure?.message || 'Pipeline synthesis failed schema validation')
-            }
-            return {
-                ok: finalJson.ok,
-                finalText: finalJson.text,
-                output: finalJson.data,
-                intent,
-                plan,
-                phaseTraces,
-                stepOutputs,
-                error: finalJson.failure?.message,
-            }
+            if (throwOnError && !finalJson.ok) throw new Error(finalJson.failure?.message || 'Pipeline synthesis failed schema validation')
+            return {ok: finalJson.ok, finalText: finalJson.text, output: finalJson.data,
+                intent, plan, phaseTraces, stepOutputs, error: finalJson.failure?.message,
+                executionHistory: transition ? [...history] : undefined}
         }
-
-        const finalAsk = await this.asker.ask(synthesisPrompt, {
-            ...this.askOptions,
-            ...options.askOptions,
-        })
-
-        if (throwOnError && !finalAsk.ok) {
-            throw new Error(finalAsk.failure?.message || 'Pipeline synthesis failed')
-        }
-
-        return {
-            ok: finalAsk.ok,
-            finalText: finalAsk.text,
-            intent,
-            plan,
-            phaseTraces,
-            stepOutputs,
-            error: finalAsk.failure?.message,
-        }
+        const finalAsk = await this.asker.ask(synthesisPrompt, {...this.askOptions, ...options.askOptions})
+        if (throwOnError && !finalAsk.ok) throw new Error(finalAsk.failure?.message || 'Pipeline synthesis failed')
+        return {ok: finalAsk.ok, finalText: finalAsk.text, intent, plan, phaseTraces,
+            stepOutputs, error: finalAsk.failure?.message,
+            executionHistory: transition ? [...history] : undefined}
     }
 
-    private makeAbortResult<T>(
-        intent: PreprocessedIntent,
-        plan: ExecutionPlan,
+    private makeAbortResult<T>(intent: PreprocessedIntent, plan: ExecutionPlan,
         phaseTraces: Record<string, ActorStepRecord[]> = {},
-        stepOutputs: Record<string, string> = {},
-    ): PipelineRunResult<T> {
-        return {
-            ok: false,
-            finalText: '',
-            intent,
-            plan,
-            phaseTraces,
-            stepOutputs,
-            error: 'Pipeline execution aborted by signal.',
-        }
+        stepOutputs: Record<string, string> = {}, history?: StageExecution[]): PipelineRunResult<T> {
+        return {ok: false, finalText: '', intent, plan, phaseTraces, stepOutputs,
+            executionHistory: history ? [...history] : undefined,
+            error: 'Pipeline execution aborted by signal.'}
     }
 }
