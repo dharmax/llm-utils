@@ -1,6 +1,6 @@
 # Optional pipeline transitions
 
-`LLMPipeline` remains linear by default. Set `onTransition` only when a task needs conditional stage scheduling. The callback runs after **each resolved stage**, including stages skipped or substituted through `onException`. Unhandled tool/actor failures still use `onException` and terminate normally if unrecovered.
+`LLMPipeline` remains linear by default. Set `onTransition` only for conditional stage scheduling. The callback runs after each resolved stage, including a stage skipped or substituted through `onException`; an unrecovered failure still aborts via the existing exception path.
 
 ```ts
 const pipeline = new LLMPipeline(asker, {
@@ -11,9 +11,10 @@ const pipeline = new LLMPipeline(asker, {
     if (outcome !== 'completed')
       return {action: 'abort', reason: 'Required inspection did not complete'}
 
-    // Interpret real tool observations, not the actor's final prose alone.
     switch (step.id) {
       case 'inspect':
+        if (!observedRequiredData(result))
+          return {action: 'retry', wisdom: 'Gather the missing observations'}
         switch (classifyObservedPressure(result)) {
           case 'memory': return {action: 'goto', stepId: 'inspect_memory'}
           case 'cpu': return {action: 'goto', stepId: 'inspect_cpu'}
@@ -32,10 +33,12 @@ const pipeline = new LLMPipeline(asker, {
 })
 ```
 
-Transitions are `next` (or `undefined` on a successfully completed stage), `goto` to an existing stage ID, `retry` the current stage with optional corrective wisdom, and `abort`. A conventional indexed `for` loop and `switch` perform scheduling; there is no second workflow engine.
+## Execution semantics
 
-The callback sees the actor's complete `result`, actual stage `outcome`, chronological `history` retained across loops, current output snapshot, intent and plan. Existing `stepOutputs` and `phaseTraces` remain compatible but represent the latest execution of repeated stages. The next actor receives declared dependencies and the preceding *still-valid* completed stage's summary.
+A `while` loop owns an explicit cursor; a `switch` is its sole transition mechanism. `next` (or `undefined` after success) increments the cursor, `goto` assigns the validated destination index, `retry` leaves the cursor unchanged and optionally supplies wisdom, and `abort` stops execution. There is no automatic increment, `i--`, `target - 1`, generated JavaScript, or second workflow engine. Without `onTransition`, the existing linear happy path and `onException` API remain supported.
 
-In transition mode, IDs must be unique, destinations registered, declared prerequisites successfully completed, backward jumps invalidate outputs from their target onward, and a total stage-execution budget bounds loops. Skipped or substituted stages require an explicit transition decision; they never automatically satisfy declared prerequisites. A rejected apparent completion can return `retry`, subject to retry and stage budgets.
+The callback receives the original goal, the actor's full result (including tool observations), the actual outcome, chronological execution history, current outputs, intent and plan. `stepOutputs` and `phaseTraces` retain the latest execution for each stage; `executionHistory` retains every visit, including invalidated loop iterations. An actor receives declared dependency outputs and the last still-valid stage's summary.
 
-**Application responsibilities:** the callback chooses only among planned stages. It cannot amend user requirements, confer authorization, or independently prove success. Verify observations and final task obligations before accepting completion. Re-executions are fresh tool invocations; the host must prohibit automatic repetition of potentially mutating operations with uncertain effects. For branch joins, declare only prerequisites common to each incoming path. The original `onException` remains responsible for unexpected failures.
+In transition mode, IDs and dependencies must exist; destinations must satisfy prerequisites; revisiting a stage invalidates its previous results and downstream outputs. A bounded stage-execution budget prevents infinite loops, and retries have a separate bound. An unresolved skipped or substituted stage cannot yield successful synthesis—even if the callback explicitly advances. An apparent `final_answer` without observations can be rejected with `retry`.
+
+**Limits:** transitions choose only among already planned stages. They do not authorize tools, amend user requirements, establish that every original requirement was met, or make repeated side effects safe. The calling application must enforce those policies; branch joins should declare prerequisites common to every incoming path.
