@@ -3,9 +3,7 @@ import {LLMActor, type ActorRunResult, type ActorStepRecord, type ToolDefinition
 import type {Asker} from './asker.ts'
 import type {AskOptions} from './types.ts'
 
-/**
- * Phase 1: Preprocessed user intent and extracted constraints.
- */
+/** Phase 1: Preprocessed user intent and extracted constraints. */
 export interface PreprocessedIntent {
     normalizedGoal: string
     domain?: string
@@ -22,9 +20,7 @@ export const PreprocessedIntentSchema = z.object({
     suggestedPhases: z.array(z.string()).default([]).describe('Logical stages required to complete the task'),
 })
 
-/**
- * Phase 2: Planned step with dependencies.
- */
+/** Phase 2: Planned step with dependencies. */
 export interface PlanStep {
     id: string
     description: string
@@ -40,16 +36,14 @@ export interface ExecutionPlan {
 export const ExecutionPlanSchema = z.object({
     strategy: z.string().describe('High-level architectural approach to accomplish the goal'),
     steps: z.array(z.object({
-        id: z.string().describe('Unique step identifier (e.g. step_1)'),
+        id: z.string().describe('Unique step identifier (e.g. step_1, step_2)'),
         description: z.string().describe('Specific, actionable sub-task to execute'),
         assignedTools: z.array(z.string()).default([]).describe('Tool names to use in this step'),
         dependsOn: z.array(z.string()).optional().describe('Step IDs that must complete before this step'),
     })).describe('Ordered list of steps to execute'),
 })
 
-/**
- * Service Adapter interfaces for pluggability.
- */
+/** Service Adapter interfaces for pluggability. */
 export interface IntentPreprocessorAdapter {
     preprocess(goal: string, tools: ToolDefinition[], options?: AskOptions): Promise<PreprocessedIntent>
 }
@@ -97,6 +91,8 @@ export type PipelineTransition =
 export interface PipelineTransitionContext {
     step: PlanStep
     result: ActorRunResult
+    /** This stage's actual outcome, not merely the actor's text. */
+    outcome: StageExecution['outcome']
     history: ReadonlyArray<Readonly<StageExecution>>
     stepOutputs: Readonly<Record<string, string>>
     intent: PreprocessedIntent
@@ -137,10 +133,7 @@ export interface PipelineOptions {
     maxStageExecutions?: number
 }
 
-/**
- * Preprocess -> Plan -> Scoped LLMActors -> Synthesize.
- * The optional transition callback adds branching without a second workflow engine.
- */
+/** Preprocess -> Plan -> Scoped LLMActors -> Synthesize; optional conditional transitions. */
 export class LLMPipeline {
     private readonly tools = new Map<string, ToolDefinition>()
     private readonly maxStepsPerPhase: number
@@ -205,7 +198,7 @@ ${goal}`
         if (this.planner) return this.planner.plan(intent, this.getTools(), options)
 
         const toolCatalog = [...this.tools.values()].map(t => `- ${t.name}: ${t.description}`).join('\n')
-        const prompt = `Decompose this normalized goal into an ordered plan of sequential or dependent sub-tasks.
+        const prompt = `Decompose this normalized goal into a concise, ordered plan of sequential or dependent sub-tasks.
 
 Normalized Goal: ${intent.normalizedGoal}
 Constraints: ${intent.constraints.join(', ') || 'None'}
@@ -257,11 +250,12 @@ Output an ordered execution plan with step IDs and dependencies.`
 
         if (transition) {
             if (!Number.isSafeInteger(budget) || budget < 1) return fail('maxStageExecutions must be a positive integer')
+            if (!plan.steps.length) return fail('Branching plan contains no stages')
             if (stepIndices!.size !== plan.steps.length) return fail('Branching plan contains duplicate stage IDs')
         }
         await this.onPhaseChange?.('execute', {plan})
 
-        // Ordinary execution still increments by one; a transition only changes the index.
+        // The index changes only on an explicit callback transition; increment remains native to for.
         for (let i = 0; i < plan.steps.length; i++) {
             if (options.signal?.aborted) return this.makeAbortResult(intent, plan, phaseTraces, stepOutputs)
             const step = plan.steps[i]!
@@ -278,16 +272,16 @@ Output an ordered execution plan with step IDs and dependencies.`
                     .map(id => `[Result of ${id}]: ${stepOutputs[id]}`).join('\n')
                 if (deps) prereqContext = `\nPrerequisite Context:\n${deps}\n`
             }
-            // Branch joins also see the actual preceding stage, even if it wasn't a static dependency.
+            // A backward jump invalidates completed results; never inject stale previous-stage context.
             const previous = transition ? history.at(-1) : undefined
-            if (previous?.outcome === 'completed' && !(step.dependsOn ?? []).includes(previous.stepId))
+            if (previous?.outcome === 'completed' && completed.has(previous.stepId) &&
+                !(step.dependsOn ?? []).includes(previous.stepId))
                 prereqContext += `\nPrevious Stage (${previous.stepId}): ${previous.output}\n`
 
             const scopedTools = step.assignedTools.length > 0
                 ? [...this.tools.values()].filter(t => step.assignedTools.includes(t.name))
                 : [...this.tools.values()]
-            // A missing explicitly assigned tool must never expand scope to every tool.
-            if (step.assignedTools.length > 0 && scopedTools.length !== step.assignedTools.length)
+            if (step.assignedTools.some(name => !this.tools.has(name)))
                 return fail(`Stage ${step.id} refers to unavailable tools`)
             const makeActor = (tools: ToolDefinition[]) => new LLMActor(this.asker, {
                 tools, maxSteps: this.maxStepsPerPhase,
@@ -315,7 +309,6 @@ Output an ordered execution plan with step IDs and dependencies.`
                 return toolResults.findLast(r => r.isError)?.error || `Execution halted (${res.haltReason})`
             }
 
-            // Existing exception mechanism; branching does not replace it.
             while (isStepException(stepResult)) {
                 if (options.signal?.aborted) return this.makeAbortResult(intent, plan, phaseTraces, stepOutputs)
                 const stepError = getStepError(stepResult)
@@ -371,10 +364,9 @@ Provide a single concise corrective instruction ("wisdom") for how to format par
                     const retryTools = resolution.assignedTools?.length
                         ? [...this.tools.values()].filter(t => resolution.assignedTools!.includes(t.name))
                         : scopedTools
-                    if (resolution.assignedTools?.length && retryTools.length !== resolution.assignedTools.length)
+                    if (resolution.assignedTools?.some(name => !this.tools.has(name)))
                         return fail(`Retry for ${step.id} refers to unavailable tools`)
-                    const retryActor = makeActor(retryTools)
-                    stepResult = await retryActor.run(`${step.description}${prereqContext}${correctiveContext}`, {signal: options.signal})
+                    stepResult = await makeActor(retryTools).run(`${step.description}${prereqContext}${correctiveContext}`, {signal: options.signal})
                     phaseTraces[`${step.id}_retry_${attempts - 1}`] = stepResult.steps
                 }
             }
@@ -388,16 +380,18 @@ Provide a single concise corrective instruction ("wisdom") for how to format par
                 output: stepOutputs[step.id] ?? '', outcome})
             await this.onPhaseChange?.('step_end', {step, result: stepResult})
 
-            // A normal failed/skipped/continued stage still follows legacy onException semantics.
-            if (!transition || outcome !== 'completed') continue
+            if (!transition) continue
             if (options.signal?.aborted) return this.makeAbortResult(intent, plan, phaseTraces, stepOutputs)
             let decision: PipelineTransition | void
             try {
-                decision = await transition({step, result: stepResult, history: history.slice(),
-                    stepOutputs: {...stepOutputs}, intent, plan})
+                decision = await transition({step, result: stepResult, outcome,
+                    history: history.slice(), stepOutputs: {...stepOutputs}, intent, plan})
             } catch (error) {
                 return fail(`Transition callback failed: ${error instanceof Error ? error.message : String(error)}`)
             }
+            // Substituted or skipped work requires an explicit host decision to proceed.
+            if (outcome !== 'completed' && !decision)
+                return fail(`Transition must explicitly resolve ${outcome} stage ${step.id}`)
             switch (decision?.action) {
                 case undefined:
                 case 'next':
@@ -407,7 +401,6 @@ Provide a single concise corrective instruction ("wisdom") for how to format par
                     return fail(decision.reason || `Transition aborted after ${step.id}`)
                 case 'retry':
                     if (++transitionRetries > maxRetries) return fail(`Transition retries exhausted for ${step.id}`)
-                    // Retry is another execution. Never reuse this result as current evidence.
                     delete stepOutputs[step.id]
                     completed.delete(step.id)
                     retryWisdom = decision.wisdom ?? ''
@@ -418,7 +411,7 @@ Provide a single concise corrective instruction ("wisdom") for how to format par
                     const target = stepIndices!.get(decision.stepId)
                     if (target === undefined) return fail(`Unknown transition target: ${decision.stepId}`)
                     if (target <= i) {
-                        // A new loop iteration invalidates downstream results; history remains intact.
+                        // Each loop iteration starts fresh from its target; history retains earlier observations.
                         for (let j = target; j < plan.steps.length; j++) {
                             delete stepOutputs[plan.steps[j]!.id]
                             completed.delete(plan.steps[j]!.id)
@@ -426,7 +419,7 @@ Provide a single concise corrective instruction ("wisdom") for how to format par
                     }
                     const missing = (plan.steps[target]!.dependsOn ?? []).filter(id => !completed.has(id))
                     if (missing.length) return fail(`Transition to ${decision.stepId} has unsatisfied dependencies: ${missing.join(', ')}`)
-                    i = target - 1 // the for loop's increment advances exactly to target
+                    i = target - 1 // for increments to exactly target
                     break
                 }
                 default:
