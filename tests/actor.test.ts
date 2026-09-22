@@ -291,3 +291,81 @@ test('LLMActor.run parses structured output schema when specified', async () => 
     expect(result.haltReason).toBe('completed')
     expect(result.output).toEqual({status: 'healthy', latency: 42})
 })
+
+
+test('LLMActor skips an exact duplicate tool call', async () => {
+    const asker = createMockAsker([
+        {
+            thought: 'Get it.',
+            action: 'tool_call',
+            toolCalls: [{callId: 'c1', name: 'lookup', parameters: {query: 'x'}}],
+        },
+        {
+            thought: 'Try the same thing again.',
+            action: 'tool_call',
+            toolCalls: [{callId: 'c2', name: 'lookup', parameters: {query: 'x'}}],
+        },
+        {
+            thought: 'Use the observation.',
+            action: 'final_answer',
+            finalAnswer: 'done',
+        },
+    ])
+
+    let executions = 0
+    const actor = new LLMActor(asker, {
+        tools: [{
+            name: 'lookup',
+            description: 'Lookup',
+            parameters: z.object({query: z.string()}),
+            execute: () => {
+                executions += 1
+                return 'result'
+            },
+        }],
+    })
+
+    const result = await actor.run('lookup x')
+
+    expect(result.ok).toBe(true)
+    expect(executions).toBe(1)
+    expect(result.steps[1].toolResults[0].isError).toBe(true)
+    expect(result.steps[1].toolResults[0].error).toMatch(/Duplicate tool call skipped/)
+})
+
+test('LLMActor gets one final synthesis after exhausting the step budget', async () => {
+    const asker = createMockAsker([
+        {
+            thought: 'First observation.',
+            action: 'tool_call',
+            toolCalls: [{callId: 'c1', name: 'lookup', parameters: {query: 'a'}}],
+        },
+        {
+            thought: 'Second observation.',
+            action: 'tool_call',
+            toolCalls: [{callId: 'c2', name: 'lookup', parameters: {query: 'b'}}],
+        },
+        {
+            thought: 'Synthesize existing observations.',
+            finalAnswer: 'best available answer',
+        },
+    ])
+
+    const actor = new LLMActor(asker, {
+        maxSteps: 2,
+        tools: [{
+            name: 'lookup',
+            description: 'Lookup',
+            parameters: z.object({query: z.string()}),
+            execute: ({query}: {query: string}) => query,
+        }],
+    })
+
+    const result = await actor.run('answer from lookups')
+
+    expect(result.ok).toBe(true)
+    expect(result.haltReason).toBe('completed')
+    expect(result.finalText).toBe('best available answer')
+    expect(result.totalSteps).toBe(3)
+    expect(result.steps[2].action).toBe('final_answer')
+})
