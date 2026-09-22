@@ -1,3 +1,8 @@
+/**
+ * Responsibility: orchestrate bounded LLM Think→Act→Observe loops over registered tools.
+ * Scope: tool registration, model decisions, validated execution, observations, completion, and bounded-loop safeguards.
+ * Rules: remain domain-agnostic; never hide tool execution; avoid redundant calls and always preserve a final synthesis opportunity.
+ */
 import type {ZodType} from 'zod'
 import {z} from 'zod'
 import type {Asker} from './asker.ts'
@@ -84,6 +89,11 @@ const ActorDecisionSchema = z.object({
 })
 
 export type ActorDecision = z.infer<typeof ActorDecisionSchema>
+
+const FinalAnswerSchema = z.object({
+    thought: z.string().optional().default(''),
+    finalAnswer: z.string(),
+})
 
 export function normalizeToolParameters(params: Record<string, unknown>, schema: ZodType): Record<string, unknown> {
     if (typeof params !== 'object' || params === null)
@@ -258,6 +268,22 @@ export class LLMActor {
                 continue
             }
 
+            const duplicate = history.some(item =>
+                item.toolCalls.some(previous =>
+                    previous.toolName === call.toolName &&
+                    JSON.stringify(previous.parameters) === JSON.stringify(call.parameters),
+                ),
+            )
+            if (duplicate) {
+                toolResults.push({
+                    callId: call.callId,
+                    toolName: call.toolName,
+                    isError: true,
+                    error: 'Duplicate tool call skipped: the same tool and parameters were already executed.',
+                })
+                continue
+            }
+
             // Execute tool inside error boundary
             try {
                 const execResult = await tool.execute(parsed.data, context)
@@ -373,6 +399,40 @@ export class LLMActor {
             }
         }
 
+        const {schema: _s1, ...defaultOpts} = this.defaultAskOptions ?? {}
+        const {schema: _s2, ...overrideOpts} = options.askOptions ?? {}
+        const finalSystem = `${this.system ? `${this.system}\n\n` : ''}The tool-step budget is exhausted. Do not call tools. Give the best final answer possible from the goal and observations already available.`
+        const final = await this.asker.json(
+            this.buildTurnPrompt(effectiveGoal, steps, steps.length + 1) +
+                '\n\nTool budget exhausted. Return the best final answer from existing observations only.',
+            FinalAnswerSchema,
+            {...defaultOpts, ...overrideOpts, system: finalSystem},
+        )
+
+        if (final.ok && final.data) {
+            const record: ActorStepRecord = {
+                step: steps.length + 1,
+                thought: final.data.thought,
+                action: 'final_answer',
+                toolCalls: [],
+                toolResults: [],
+                finalAnswer: final.data.finalAnswer,
+            }
+            steps.push(record)
+            if (this.onStep) {
+                try {
+                    await this.onStep(record)
+                } catch {}
+            }
+            return {
+                ok: true,
+                finalText: record.finalAnswer ?? '',
+                steps,
+                totalSteps: steps.length,
+                haltReason: 'completed',
+            }
+        }
+
         return {
             ok: false,
             finalText: '',
@@ -410,8 +470,9 @@ ${catalog}
 1. Reason carefully in the "thought" field before taking action.
 2. To gather info or modify state, set action="tool_call" and specify toolCalls with concrete runtime parameter values (e.g. { "callId": "1", "name": "tool_name", "parameters": { "paramName": "actual_value" } }).
 3. NEVER put JSON schema definitions, type names, or JSON pointers (like "#/...") in "parameters". Always provide the actual runtime values.
-4. When the goal is accomplished or you have the answer, IMMEDIATELY choose action="final_answer" and formulate your response in "finalAnswer". Do NOT invoke notification/messaging tools to tell the user the answer.
-5. Always produce output strictly matching the required JSON format.`
+4. Never repeat a tool call with the same tool and parameters when that call already produced an observation.
+5. When the goal is accomplished or you have the answer, IMMEDIATELY choose action="final_answer" and formulate your response in "finalAnswer". Do NOT invoke notification/messaging tools to tell the user the answer.
+6. Always produce output strictly matching the required JSON format.`
     }
 
     private buildTurnPrompt(goal: string, history: ActorStepRecord[], currentStep: number): string {
