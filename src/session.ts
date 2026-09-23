@@ -190,4 +190,10 @@ ${goal}`
     clear(): void {
         this._history = []
     }
+
+    appendMessage(message: SessionMessage): void {
+        this._history.push(message)
+        this.pruneHistory()
+    }
 }
+

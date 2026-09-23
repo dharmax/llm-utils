@@ -76,9 +76,21 @@ test('LLMSession carries actor tool observations into the next actor turn', asyn
     expect(goals[0]).toBe("what's the smallest folder under my home directory?")
     expect(goals[1]).toContain("what's the smallest folder under my home directory?")
     expect(goals[1]).toContain('/home/dharmax/.ai')
-    expect(goals[1]).toContain('## Current User Goal\\nwho is using that folder?')
+    expect(goals[1]).toContain('## Current User Goal\nwho is using that folder?')
 
     const history = session.getHistory()
     expect(history.some(message => message.content.includes('/home/dharmax/.ai'))).toBe(true)
     expect(history.some(message => message.content.includes('internal reasoning must not become session history'))).toBe(false)
 })
+
+test('LLMSession.appendMessage ingests external messages into session context', () => {
+    const session = new LLMSession({} as Asker)
+    session.appendMessage({ role: 'user', content: '!pwd' })
+    session.appendMessage({ role: 'system', content: 'Direct command observation:\n!pwd -> /home/dharmax/work\n' })
+
+    const history = session.getHistory()
+    expect(history.length).toBe(2)
+    expect(history[0]).toEqual({ role: 'user', content: '!pwd' })
+    expect(history[1].content).toContain('/home/dharmax/work')
+})
+
