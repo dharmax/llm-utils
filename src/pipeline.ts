@@ -223,6 +223,7 @@ Output an ordered execution plan with step IDs and dependencies.`
         throwOnError?: boolean
         onTransition?: PipelineTransitionHandler
         maxStageExecutions?: number
+        onStep?: (record: ActorStepRecord) => void | Promise<void>
     } = {}): Promise<PipelineRunResult<T>> {
         const throwOnError = options.throwOnError ?? this.throwOnError
         const intent = await this.preprocess(rawGoal, options.askOptions)
@@ -301,7 +302,7 @@ Output an ordered execution plan with step IDs and dependencies.`
             })
             let stepResult = await makeActor(scopedTools).run(
                 `${step.description}${prereqContext}${retryWisdom ? `\nCorrective Guidance / Wisdom:\n${retryWisdom}\n` : ''}`,
-                {signal: options.signal},
+                {signal: options.signal, onStep: options.onStep},
             )
             retryWisdom = ''
             let attempts = 1
