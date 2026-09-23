@@ -68,6 +68,7 @@ export interface ActorRunOptions<T = unknown> {
     context?: unknown
     askOptions?: AskOptions
     contextResolver?: ContextResolver
+    onStep?: (record: ActorStepRecord) => void | Promise<void>
 }
 
 export interface ActorStepResult {
@@ -361,9 +362,10 @@ export class LLMActor {
             const stepResult = await this.step(effectiveGoal, steps, options.context, options.askOptions)
             steps.push(stepResult.record)
 
-            if (this.onStep) {
+            const onStep = options.onStep ?? this.onStep
+            if (onStep) {
                 try {
-                    await this.onStep(stepResult.record)
+                    await onStep(stepResult.record)
                 } catch {
                     // Life cycle callback error should not crash the actor loop
                 }
