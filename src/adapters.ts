@@ -178,7 +178,7 @@ export class OllamaProvider implements ProviderAdapter {
                 ],
                 stream: false,
                 ...(schema ? {format: schema} : isJson ? {format: 'json'} : {}),
-                options: {temperature: temperature ?? 0.1},
+                options: {temperature: temperature ?? 0.1, num_predict: 2048},
             }
             : {
                 model: modelId,
@@ -186,7 +186,7 @@ export class OllamaProvider implements ProviderAdapter {
                 system,
                 stream: false,
                 ...(schema ? {format: schema} : isJson ? {format: 'json'} : {}),
-                options: {temperature: temperature ?? 0.1},
+                options: {temperature: temperature ?? 0.1, num_predict: 2048},
             }
 
         return postJson({

@@ -77,19 +77,53 @@ export interface ActorStepResult {
     error?: string
 }
 
-const ActorDecisionSchema = z.object({
-    thought: z.string().describe('Reasoning on the current situation and required action'),
-    action: z.enum(['tool_call', 'final_answer']).describe('Choose tool_call to execute tools, or final_answer if goal is achieved'),
-    toolCalls: z.array(z.object({
-        callId: z.string().optional().describe('Unique identifier for this call (e.g. call_1)'),
-        id: z.string().optional().describe('Alias for callId'),
-        name: z.string().describe('Name of the tool to invoke'),
-        parameters: z.record(z.string(), z.unknown()).describe('Tool arguments as key-value pairs'),
-    })).optional().default([]),
-    finalAnswer: z.string().optional().describe('Final textual answer or summary to present when action is final_answer'),
-})
+export function createActorDecisionSchema(registeredToolNames: string[] = []): z.ZodType<ActorDecision> {
+    const base = z.object({
+        thought: z.string().describe('Reasoning on the current situation and required action'),
+        action: z.enum(['tool_call', 'final_answer']).describe('Choose tool_call to execute tools, or final_answer if goal is achieved'),
+        toolCalls: z.array(z.object({
+            callId: z.string().optional().describe('Unique identifier for this call (e.g. call_1)'),
+            id: z.string().optional().describe('Alias for callId'),
+            name: registeredToolNames.length > 0
+                ? z.enum(registeredToolNames as [string, ...string[]]).describe(`Name of the registered tool to invoke (must be one of: ${registeredToolNames.join(', ')})`)
+                : z.string().describe('Name of the tool to invoke'),
+            parameters: z.record(z.string(), z.unknown()).describe('Tool arguments as key-value pairs'),
+        })).optional().default([]),
+        finalAnswer: z.string().optional().describe('Final textual answer or summary to present when action is final_answer'),
+    })
 
-export type ActorDecision = z.infer<typeof ActorDecisionSchema>
+    if (registeredToolNames.length === 0)
+        return base
+
+    return base.superRefine((data, ctx) => {
+        if (data.action === 'tool_call') {
+            for (let i = 0; i < (data.toolCalls?.length ?? 0); i += 1) {
+                const call = data.toolCalls?.[i]
+                if (call && !registeredToolNames.includes(call.name)) {
+                    ctx.addIssue({
+                        code: z.ZodIssueCode.custom,
+                        message: `Tool "${call.name}" is not registered. Registered tools: ${registeredToolNames.join(', ')}`,
+                        path: ['toolCalls', i, 'name'],
+                    })
+                }
+            }
+        }
+    })
+}
+
+export const ActorDecisionSchema = createActorDecisionSchema()
+
+export type ActorDecision = {
+    thought: string
+    action: 'tool_call' | 'final_answer'
+    toolCalls?: Array<{
+        callId?: string
+        id?: string
+        name: string
+        parameters: Record<string, unknown>
+    }>
+    finalAnswer?: string
+}
 
 export function normalizeToolParameters(params: Record<string, unknown>, schema: ZodType): Record<string, unknown> {
     if (typeof params !== 'object' || params === null)
@@ -198,13 +232,21 @@ export class LLMActor {
         const {schema: _s1, ...defaultOpts} = this.defaultAskOptions ?? {}
         const {schema: _s2, ...overrideOpts} = overrideOptions ?? {}
 
+        const registeredToolNames = [...this.tools.keys()]
+        // If onMissingTool is configured, allow open tool names so the dynamic tool hook can resolve them;
+        // otherwise, strictly constrain the decision schema to registered tool names.
+        const decisionSchema = this.onMissingTool
+            ? createActorDecisionSchema([])
+            : createActorDecisionSchema(registeredToolNames)
+
         const askOptions: Omit<AskOptions<ActorDecision>, 'schema'> = {
+            maxRetries: 2,
             ...defaultOpts,
             ...overrideOpts,
             system: overrideOptions?.system ?? systemPrompt,
         }
 
-        const res = await this.asker.json(conversationPrompt, ActorDecisionSchema, askOptions)
+        const res = await this.asker.json(conversationPrompt, decisionSchema, askOptions)
         if (!res.ok || !res.data) {
             const errorMsg = res.failure?.message ?? 'Failed to parse model decision.'
             const errorRecord: ActorStepRecord = {
@@ -448,13 +490,20 @@ ${catalog}
 ## Operational Rules
 1. Reason carefully in the "thought" field before taking action.
 2. To gather info or modify state, set action="tool_call" and specify toolCalls with concrete runtime parameter values (e.g. { "callId": "1", "name": "tool_name", "parameters": { "paramName": "actual_value" } }).
-3. NEVER put JSON schema definitions, type names, or JSON pointers (like "#/...") in "parameters". Always provide the actual runtime values.
-4. When the goal is accomplished or you have the answer, IMMEDIATELY choose action="final_answer" and formulate your response in "finalAnswer". Do NOT invoke notification/messaging tools to tell the user the answer.
-5. Always produce output strictly matching the required JSON format.`
+3. Only invoke tools that are explicitly declared in Available Tools above. NEVER invent or guess tool names.
+4. A tool error or failure is an observation to reason from, NOT proof that the goal is impossible. When a tool fails or reports invalid arguments:
+   - Repair invalid parameters or inputs;
+   - Choose an alternative registered tool or capability;
+   - Or trigger discovery if available.
+   Never surrender or claim inability merely because an initial tool call failed or encountered an error while alternative tools or approaches remain.
+5. NEVER put JSON schema definitions, type names, or JSON pointers (like "#/...") in "parameters". Always provide the actual runtime values.
+6. When the goal is accomplished or you have the answer, choose action="final_answer" and formulate your response in "finalAnswer". Do NOT invoke notification/messaging tools to tell the user the answer.
+7. Always produce output strictly matching the required JSON format.`
     }
 
     private buildTurnPrompt(goal: string, history: ActorStepRecord[], currentStep: number): string {
         const lines: string[] = [`## Goal\n${goal}`]
+        let lastStepHadError = false
 
         if (history.length > 0) {
             lines.push('\n## Prior Action History')
@@ -474,10 +523,18 @@ ${catalog}
                     }
                 }
             }
+
+            const lastItem = history[history.length - 1]
+            lastStepHadError = lastItem?.toolResults.some(r => r.isError) ?? false
         }
 
         lines.push(`\n## Current Turn: Step ${currentStep}`)
-        lines.push('Analyze the goal and any prior observations, then determine the next toolCalls or finalAnswer.')
+        if (lastStepHadError) {
+            lines.push('⚠️ RECOVERY / REPLANNING TURN: The previous step encountered tool errors or invalid inputs.')
+            lines.push('Do NOT conclude the goal is impossible. Re-evaluate available registered tools, repair arguments, choose an alternative tool, or use discovery to achieve the goal.')
+        } else {
+            lines.push('Analyze the goal and any prior observations, then determine the next toolCalls or finalAnswer.')
+        }
         return lines.join('\n')
     }
 }

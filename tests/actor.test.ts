@@ -321,3 +321,134 @@ test('LLMActor.run parses structured output schema when specified', async () => 
     expect(result.haltReason).toBe('completed')
     expect(result.output).toEqual({status: 'healthy', latency: 42})
 })
+
+test('LLMActor rejects hallucinated tool name before execution and corrects to real tool via retry', async () => {
+    // Model initially responds with hallucinated 'system_info.gpu_load', then corrects to 'shell'
+    const asker = createMockAsker([
+        {
+            thought: 'Querying GPU load via phantom tool.',
+            action: 'tool_call',
+            toolCalls: [{callId: 'c1', name: 'system_info.gpu_load', parameters: {}}],
+        },
+        {
+            thought: 'Correcting to real tool shell.',
+            action: 'tool_call',
+            toolCalls: [{callId: 'c1', name: 'shell', parameters: {cmd: 'nvidia-smi'}}],
+        },
+    ])
+
+    let executedCommand = ''
+    const actor = new LLMActor(asker, {
+        tools: [
+            {
+                name: 'shell',
+                description: 'Execute shell command',
+                parameters: z.object({cmd: z.string()}),
+                execute: ({cmd}: {cmd: string}) => {
+                    executedCommand = cmd
+                    return 'GPU 0: 45%'
+                },
+            },
+        ],
+    })
+
+    const stepResult = await actor.step('Get GPU load')
+    expect(stepResult.isDone).toBe(false)
+    expect(stepResult.record.toolCalls[0].toolName).toBe('shell')
+    expect(stepResult.record.toolResults[0].result).toBe('GPU 0: 45%')
+    expect(executedCommand).toBe('nvidia-smi')
+})
+
+test('LLMActor feeds back real tool failure and actor replans with alternative tool', async () => {
+    const asker = createMockAsker([
+        // Turn 1: Attempt tool A
+        {
+            thought: 'Attempt primary service inspection tool.',
+            action: 'tool_call',
+            toolCalls: [{callId: 'c1', name: 'primaryCheck', parameters: {}}],
+        },
+        // Turn 2: Primary failed, replan to use secondary tool
+        {
+            thought: 'Primary check failed with network error. Replanning to fallback inspection.',
+            action: 'tool_call',
+            toolCalls: [{callId: 'c2', name: 'fallbackCheck', parameters: {}}],
+        },
+        // Turn 3: Conclude successfully
+        {
+            thought: 'Fallback succeeded. Reporting status.',
+            action: 'final_answer',
+            finalAnswer: 'Service is operational via fallback.',
+        },
+    ])
+
+    const actor = new LLMActor(asker, {
+        tools: [
+            {
+                name: 'primaryCheck',
+                description: 'Primary check',
+                parameters: z.object({}),
+                execute: () => {
+                    throw new Error('Service endpoint unreachable')
+                },
+            },
+            {
+                name: 'fallbackCheck',
+                description: 'Fallback check',
+                parameters: z.object({}),
+                execute: () => ({status: 'operational_fallback'}),
+            },
+        ],
+    })
+
+    const result = await actor.run('Check service health')
+    expect(result.ok).toBe(true)
+    expect(result.haltReason).toBe('completed')
+    expect(result.steps.length).toBe(3)
+    expect(result.steps[0].toolResults[0].isError).toBe(true)
+    expect(result.steps[1].toolResults[0].isError).toBe(false)
+    expect(result.finalText).toBe('Service is operational via fallback.')
+})
+
+test('LLMActor feeds back invalid parameter error and actor repairs arguments on next turn', async () => {
+    const asker = createMockAsker([
+        // Turn 1: Send bad parameters
+        {
+            thought: 'Call search with negative limit.',
+            action: 'tool_call',
+            toolCalls: [{callId: 'c1', name: 'search', parameters: {query: 'test', limit: -5}}],
+        },
+        // Turn 2: Repair parameters
+        {
+            thought: 'Limit was invalid. Repairing limit to 5.',
+            action: 'tool_call',
+            toolCalls: [{callId: 'c2', name: 'search', parameters: {query: 'test', limit: 5}}],
+        },
+        // Turn 3: Complete
+        {
+            thought: 'Results obtained.',
+            action: 'final_answer',
+            finalAnswer: 'Found 1 item.',
+        },
+    ])
+
+    const actor = new LLMActor(asker, {
+        tools: [
+            {
+                name: 'search',
+                description: 'Search items',
+                parameters: z.object({
+                    query: z.string(),
+                    limit: z.number().positive(),
+                }),
+                execute: ({query, limit}: {query: string; limit: number}) => ({count: 1, limit}),
+            },
+        ],
+    })
+
+    const result = await actor.run('Search test')
+    expect(result.ok).toBe(true)
+    expect(result.steps[0].toolResults[0].isError).toBe(true)
+    expect(result.steps[0].toolResults[0].error).toMatch(/Invalid parameters/)
+    expect(result.steps[1].toolResults[0].isError).toBe(false)
+    expect(result.finalText).toBe('Found 1 item.')
+})
