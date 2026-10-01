@@ -57,6 +57,8 @@ export interface ActorOptions {
 }
 
 export interface ActorRunOptions<T = unknown> {
+    /** Exact tool surface for this run. When omitted, the actor's registered tools are used. */
+    tools?: readonly ToolDefinition[]
     maxSteps?: number
     schema?: ZodType<T>
     signal?: AbortSignal
@@ -175,8 +177,18 @@ export class LLMActor {
         context?: unknown,
         overrideOptions?: AskOptions,
     ): Promise<ActorStepResult> {
+        return this.executeStep(goal, history, context, overrideOptions, this.tools)
+    }
+
+    private async executeStep(
+        goal: string,
+        history: ActorStepRecord[],
+        context: unknown,
+        overrideOptions: AskOptions | undefined,
+        tools: ReadonlyMap<string, ToolDefinition>,
+    ): Promise<ActorStepResult> {
         const stepNumber = history.length + 1
-        const catalog = this.renderToolCatalog()
+        const catalog = this.renderToolCatalog(tools)
         const systemPrompt = this.buildSystemPrompt(catalog)
 
         const conversationPrompt = this.buildTurnPrompt(goal, history, stepNumber)
@@ -233,13 +245,13 @@ export class LLMActor {
         const toolResults: ToolExecutionResult[] = []
 
         for (const call of toolCalls) {
-            const tool = this.tools.get(call.toolName)
+            const tool = tools.get(call.toolName)
             if (!tool) {
                 toolResults.push({
                     callId: call.callId,
                     toolName: call.toolName,
                     isError: true,
-                    error: `Tool "${call.toolName}" is not registered. Available tools: ${[...this.tools.keys()].join(', ')}`,
+                    error: `Tool "${call.toolName}" is not available for this run. Available tools: ${[...tools.keys()].join(', ')}`,
                 })
                 continue
             }
@@ -298,6 +310,9 @@ export class LLMActor {
         const max = options.maxSteps ?? this.maxSteps
         const steps: ActorStepRecord[] = []
         const signal = options.signal
+        const tools = options.tools
+            ? new Map(options.tools.map(tool => [tool.name, tool] as const))
+            : this.tools
 
         // Auto-inject RAG context if contextResolver is provided
         let effectiveGoal = goal
@@ -321,7 +336,13 @@ export class LLMActor {
                 }
             }
 
-            const stepResult = await this.step(effectiveGoal, steps, options.context, options.askOptions)
+            const stepResult = await this.executeStep(
+                effectiveGoal,
+                steps,
+                options.context,
+                options.askOptions,
+                tools,
+            )
             steps.push(stepResult.record)
 
             if (this.onStep) {
@@ -383,8 +404,8 @@ export class LLMActor {
         }
     }
 
-    private renderToolCatalog(): string {
-        const tools = [...this.tools.values()]
+    private renderToolCatalog(toolMap: ReadonlyMap<string, ToolDefinition>): string {
+        const tools = [...toolMap.values()]
         if (tools.length === 0)
             return 'No tools available.'
 
