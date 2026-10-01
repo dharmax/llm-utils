@@ -241,6 +241,16 @@ if (result.ok) {
 }
 ```
 
+A run may override the actor's registered catalog with an **exact run-local tool surface**:
+
+```ts
+await actor.run(goal, {
+    tools: relevantTools,
+})
+```
+
+When `tools` is supplied to `run()`, only those tools are rendered to the model and executable for that run. The actor's globally registered tools are neither mutated nor implicitly added. This is intended for hosts that perform semantic capability discovery before execution.
+
 ### 2. Step-by-Step Control (Interactive UIs & Human Gates)
 
 For stepped execution, approval workflows, or interactive agent interfaces, use `actor.step()`:
