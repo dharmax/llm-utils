@@ -291,3 +291,83 @@ test('LLMActor.run parses structured output schema when specified', async () => 
     expect(result.haltReason).toBe('completed')
     expect(result.output).toEqual({status: 'healthy', latency: 42})
 })
+
+
+test('LLMActor.run uses an exact run-local tool surface without mutating registered tools', async () => {
+    const asker = createMockAsker([
+        {
+            thought: 'Use the local tool.',
+            action: 'tool_call',
+            toolCalls: [
+                {callId: 'c1', name: 'local_tool', parameters: {}},
+            ],
+        },
+        {
+            thought: 'Done.',
+            action: 'final_answer',
+            finalAnswer: 'local result',
+        },
+    ])
+
+    let globalExecuted = false
+    let localExecuted = false
+
+    const globalTool = {
+        name: 'global_tool',
+        description: 'Globally registered tool',
+        parameters: z.object({}),
+        execute: () => {
+            globalExecuted = true
+            return 'global'
+        },
+    }
+    const localTool = {
+        name: 'local_tool',
+        description: 'Tool available only for this run',
+        parameters: z.object({}),
+        execute: () => {
+            localExecuted = true
+            return 'local'
+        },
+    }
+
+    const actor = new LLMActor(asker, {tools: [globalTool]})
+    const result = await actor.run('Use only the selected tool', {tools: [localTool]})
+
+    expect(result.ok).toBe(true)
+    expect(localExecuted).toBe(true)
+    expect(globalExecuted).toBe(false)
+    expect(actor.getTools()).toEqual([globalTool])
+})
+
+test('LLMActor.run rejects globally registered tools excluded from the run-local surface', async () => {
+    const asker = createMockAsker([
+        {
+            thought: 'Try the global tool.',
+            action: 'tool_call',
+            toolCalls: [
+                {callId: 'c1', name: 'global_tool', parameters: {}},
+            ],
+        },
+    ])
+
+    let executed = false
+    const actor = new LLMActor(asker, {
+        maxSteps: 1,
+        tools: [{
+            name: 'global_tool',
+            description: 'Globally registered tool',
+            parameters: z.object({}),
+            execute: () => {
+                executed = true
+                return 'global'
+            },
+        }],
+    })
+
+    const result = await actor.run('Do not expose the global tool', {tools: []})
+
+    expect(executed).toBe(false)
+    expect(result.steps[0].toolResults[0].isError).toBe(true)
+    expect(result.steps[0].toolResults[0].error).toContain('not available for this run')
+})
