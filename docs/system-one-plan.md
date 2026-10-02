@@ -44,7 +44,7 @@ Requirements:
 
 Do not duplicate ai-cli routing/safety questions in llm-utils.
 
-### Step 3 — prove batching and fallback
+### Step 3 — prove batching, Bun compatibility and fallback
 
 Tests must prove:
 
@@ -56,6 +56,8 @@ Tests must prove:
 - malformed backend result does not fabricate an answer;
 - timeout is bounded;
 - no autoregressive LLM call is involved.
+
+Run one real in-process Laya smoke test under Bun when the model is available. If @receptron/laya/onnxruntime-node is not reliably usable under Bun, keep the shared remote adapter as the supported path and stop rather than adding runtime shims or ONNX machinery to llm-utils.
 
 Run:
 
