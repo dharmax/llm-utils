@@ -71,6 +71,11 @@ export interface ActorRunOptions<T = unknown> {
     askOptions?: AskOptions
     contextResolver?: ContextResolver
     onStep?: (record: ActorStepRecord) => void | Promise<void>
+    onMissingTool?: (
+        toolName: string,
+        parameters: Record<string, unknown>,
+        context?: unknown
+    ) => Promise<ToolExecutionResult | ToolDefinition | undefined> | ToolExecutionResult | ToolDefinition | undefined
 }
 
 export interface ActorStepResult {
@@ -233,8 +238,13 @@ export class LLMActor {
         history: ActorStepRecord[],
         context: unknown,
         overrideOptions: AskOptions | undefined,
-        tools: ReadonlyMap<string, ToolDefinition>,
+        tools: Map<string, ToolDefinition>,
         runLocalTools: boolean,
+        onMissingTool?: (
+            toolName: string,
+            parameters: Record<string, unknown>,
+            context?: unknown
+        ) => Promise<ToolExecutionResult | ToolDefinition | undefined> | ToolExecutionResult | ToolDefinition | undefined,
     ): Promise<ActorStepResult> {
         const stepNumber = history.length + 1
         const catalog = this.renderToolCatalog(tools)
@@ -246,9 +256,8 @@ export class LLMActor {
         const {schema: _s2, ...overrideOpts} = overrideOptions ?? {}
 
         const registeredToolNames = [...tools.keys()]
-        // Dynamic missing-tool recovery is valid only for the actor's ordinary registered surface.
-        // An explicit run-local surface is closed: it is the exact catalog for that run.
-        const decisionSchema = this.onMissingTool && !runLocalTools
+        const missingToolHandler = runLocalTools ? onMissingTool : (this.onMissingTool ?? onMissingTool)
+        const decisionSchema = missingToolHandler
             ? createActorDecisionSchema([])
             : createActorDecisionSchema(registeredToolNames)
 
@@ -303,9 +312,9 @@ export class LLMActor {
 
         for (const call of toolCalls) {
             let tool = tools.get(call.toolName)
-            if (!tool && !runLocalTools && this.onMissingTool) {
+            if (!tool && missingToolHandler) {
                 try {
-                    const fallback = await this.onMissingTool(call.toolName, call.parameters, context)
+                    const fallback = await missingToolHandler(call.toolName, call.parameters, context)
                     if (fallback) {
                         if ('isError' in fallback && typeof fallback.isError === 'boolean') {
                             toolResults.push(fallback as ToolExecutionResult)
@@ -313,7 +322,11 @@ export class LLMActor {
                         }
                         if ('execute' in fallback && typeof (fallback as any).execute === 'function') {
                             tool = fallback as ToolDefinition
-                            this.registerTool(tool)
+                            if (runLocalTools) {
+                                tools.set(tool.name, tool)
+                            } else {
+                                this.registerTool(tool)
+                            }
                         }
                     }
                 } catch (err) {
@@ -427,6 +440,7 @@ export class LLMActor {
                 options.askOptions,
                 tools,
                 runLocalTools,
+                options.onMissingTool,
             )
             steps.push(stepResult.record)
 

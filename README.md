@@ -249,7 +249,7 @@ await actor.run(goal, {
 })
 ```
 
-When `tools` is supplied to `run()`, only those tools are rendered to the model and executable for that run. The actor's registered tools are not mutated or implicitly added, and `onMissingTool` does not expand the closed run-local surface. This is intended for hosts that perform capability discovery before execution.
+When `tools` is supplied to `run()`, only those tools are rendered to the model and executable for that run by default. The actor's registered tools are not mutated or implicitly added. If a run-level `onMissingTool` handler is provided in `ActorRunOptions`, missing tool calls during that run are dispatched to the handler, and any returned `ToolDefinition` is added strictly to the run-local tool surface for that run, leaving the actor's registered tools intact.
 
 ### 2. Step-by-Step Control (Interactive UIs & Human Gates)
 

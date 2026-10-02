@@ -529,7 +529,7 @@ test('LLMActor.run rejects globally registered tools excluded from a run-local s
     expect(result.steps[0].toolResults[0].error).toContain('not available for this run')
 })
 
-test('LLMActor.run does not expand an exact run-local surface through onMissingTool', async () => {
+test('LLMActor.run does not expand an exact run-local surface through actor-level onMissingTool', async () => {
     const asker = createMockAsker([
         {
             thought: 'Try a dynamic tool.',
@@ -557,4 +557,104 @@ test('LLMActor.run does not expand an exact run-local surface through onMissingT
     expect(recovered).toBe(false)
     expect(result.steps[0].toolResults[0].isError).toBe(true)
     expect(result.steps[0].toolResults[0].error).toContain('not available for this run')
+})
+
+test('LLMActor.run recovers missing tool on-demand via run-local onMissingTool without mutating global actor', async () => {
+    const asker = createMockAsker([
+        {
+            thought: 'Need missing tool first.',
+            action: 'tool_call',
+            toolCalls: [{callId: 'c1', name: 'recovered_tool', parameters: {query: 'abc'}}],
+        },
+        {
+            thought: 'Use recovered tool again in next step.',
+            action: 'tool_call',
+            toolCalls: [{callId: 'c2', name: 'recovered_tool', parameters: {query: 'xyz'}}],
+        },
+        {
+            thought: 'Done.',
+            action: 'final_answer',
+            finalAnswer: 'finished successfully',
+        },
+    ])
+
+    const executionLog: string[] = []
+    let onMissingCalled = 0
+
+    const initialLocalTool = {
+        name: 'initial_tool',
+        description: 'Initial tool in run-local surface',
+        parameters: z.object({}),
+        execute: () => 'initial',
+    }
+
+    const globalTool = {
+        name: 'global_tool',
+        description: 'Globally registered tool',
+        parameters: z.object({}),
+        execute: () => 'global',
+    }
+
+    const actor = new LLMActor(asker, {
+        maxSteps: 5,
+        tools: [globalTool],
+    })
+
+    const result = await actor.run('Run with recovery', {
+        tools: [initialLocalTool],
+        onMissingTool: (toolName, params) => {
+            onMissingCalled++
+            if (toolName === 'recovered_tool') {
+                return {
+                    name: 'recovered_tool',
+                    description: 'Dynamically recovered tool',
+                    parameters: z.object({query: z.string()}),
+                    execute: ({query}: {query: string}) => {
+                        executionLog.push(query)
+                        return `result for ${query}`
+                    },
+                }
+            }
+            return undefined
+        },
+    })
+
+    expect(result.ok).toBe(true)
+    expect(result.haltReason).toBe('completed')
+    expect(result.steps.length).toBe(3)
+    expect(onMissingCalled).toBe(1)
+    expect(executionLog).toEqual(['abc', 'xyz'])
+    expect(result.steps[0].toolResults[0].isError).toBe(false)
+    expect(result.steps[0].toolResults[0].result).toBe('result for abc')
+    expect(result.steps[1].toolResults[0].isError).toBe(false)
+    expect(result.steps[1].toolResults[0].result).toBe('result for xyz')
+    // Crucial: Global actor tools MUST NOT be mutated
+    expect(actor.getTools()).toEqual([globalTool])
+    expect(actor.getTool('recovered_tool')).toBeUndefined()
+})
+
+test('LLMActor.run treats unresolvable run-local missing tools as ordinary tool errors', async () => {
+    const asker = createMockAsker([
+        {
+            thought: 'Try unknown tool.',
+            action: 'tool_call',
+            toolCalls: [{callId: 'c1', name: 'nonexistent_tool', parameters: {}}],
+        },
+        {
+            thought: 'Recover from error.',
+            action: 'final_answer',
+            finalAnswer: 'handled missing tool',
+        },
+    ])
+
+    const actor = new LLMActor(asker, {maxSteps: 2})
+    const result = await actor.run('Try missing tool', {
+        tools: [],
+        onMissingTool: () => undefined,
+    })
+
+    expect(result.ok).toBe(true)
+    expect(result.steps[0].toolResults[0].isError).toBe(true)
+    expect(result.steps[0].toolResults[0].error).toContain('not available for this run')
+    expect(result.finalText).toBe('handled missing tool')
 })
