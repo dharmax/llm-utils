@@ -10,20 +10,24 @@ import {
 } from '../src/index.ts'
 
 const ollamaHost = process.env.OLLAMA_HOST || 'http://lotus:11434'
+const runLiveOllama = process.env.RUN_LIVE_OLLAMA === '1'
+const liveTest = runLiveOllama ? test : test.skip
 
-// Probe if Ollama is accessible
-const probe = await ProviderDiscovery.probeOllama(ollamaHost)
-const isOllamaUp = probe.installed && probe.models.length > 0
-const testModel = probe.models.find(m => m.id.includes('qwen2.5-coder:7b'))?.id
-    ?? probe.models[0]?.id
-    ?? 'qwen2.5-coder:7b'
+let isOllamaUp = false
+let testModel = 'qwen2.5-coder:7b'
 
-test('Live Ollama: Asker.prompt resolves and injects RAG context into templates with live model', async () => {
-    if (!isOllamaUp) {
-        console.warn(`Skipping live Ollama test: Ollama not reachable at ${ollamaHost}`)
-        return
-    }
+if (runLiveOllama) {
+    const probe = await ProviderDiscovery.probeOllama(ollamaHost)
+    isOllamaUp = probe.installed && probe.models.length > 0
+    testModel = probe.models.find(m => m.id.includes('qwen2.5-coder:7b'))?.id
+        ?? probe.models[0]?.id
+        ?? testModel
 
+    if (!isOllamaUp)
+        throw new Error(`RUN_LIVE_OLLAMA=1 but Ollama is not reachable at ${ollamaHost}`)
+}
+
+liveTest('Live Ollama: Asker.prompt resolves and injects RAG context into templates with live model', async () => {
     const knowledgeBase: Record<string, string> = {
         'codename': 'Project Apollo codename is: MOONSHOT_99',
     }
@@ -57,12 +61,7 @@ test('Live Ollama: Asker.prompt resolves and injects RAG context into templates 
     expect(result.text).toContain('MOONSHOT_99')
 }, 60000)
 
-test('Live Ollama: LLMActor executes end-to-end RAG + autonomous tool augmentation from natural language', async () => {
-    if (!isOllamaUp) {
-        console.warn(`Skipping live Ollama test: Ollama not reachable at ${ollamaHost}`)
-        return
-    }
-
+liveTest('Live Ollama: LLMActor executes end-to-end RAG + autonomous tool augmentation from natural language', async () => {
     const asker = new Asker({
         providers: {
             ollama: {id: 'ollama', host: ollamaHost, available: true},
@@ -115,12 +114,7 @@ test('Live Ollama: LLMActor executes end-to-end RAG + autonomous tool augmentati
     expect(result.finalText).toContain('19')
 }, 60000)
 
-test('Live Ollama: LLMActor chains multi-tool outputs with data dependencies', async () => {
-    if (!isOllamaUp) {
-        console.warn(`Skipping live Ollama test: Ollama not reachable at ${ollamaHost}`)
-        return
-    }
-
+liveTest('Live Ollama: LLMActor chains multi-tool outputs with data dependencies', async () => {
     const asker = new Asker({
         providers: {
             ollama: {id: 'ollama', host: ollamaHost, available: true},
@@ -166,12 +160,7 @@ test('Live Ollama: LLMActor chains multi-tool outputs with data dependencies', a
     expect(result.finalText).toMatch(/80|193/)
 }, 60000)
 
-test('Live Ollama: LLMActor recovers from tool errors and executes conditional fallback', async () => {
-    if (!isOllamaUp) {
-        console.warn(`Skipping live Ollama test: Ollama not reachable at ${ollamaHost}`)
-        return
-    }
-
+liveTest('Live Ollama: LLMActor recovers from tool errors and executes conditional fallback', async () => {
     const asker = new Asker({
         providers: {
             ollama: {id: 'ollama', host: ollamaHost, available: true},
@@ -211,12 +200,7 @@ test('Live Ollama: LLMActor recovers from tool errors and executes conditional f
     expect(result.finalText).toContain('8080')
 }, 60000)
 
-test('Live Ollama: LLMPipeline executes full multi-phase lifecycle end-to-end', async () => {
-    if (!isOllamaUp) {
-        console.warn(`Skipping live Ollama test: Ollama not reachable at ${ollamaHost}`)
-        return
-    }
-
+liveTest('Live Ollama: LLMPipeline executes full multi-phase lifecycle end-to-end', async () => {
     const asker = new Asker({
         providers: {
             ollama: {id: 'ollama', host: ollamaHost, available: true},
@@ -270,12 +254,7 @@ test('Live Ollama: LLMPipeline executes full multi-phase lifecycle end-to-end', 
     expect(phaseEvents).toContain('verify')
 }, 90000)
 
-test('Live Ollama: LLMPipeline intercepts failure and completes task using onException wisdom', async () => {
-    if (!isOllamaUp) {
-        console.warn(`Skipping live Ollama test: Ollama not reachable at ${ollamaHost}`)
-        return
-    }
-
+liveTest('Live Ollama: LLMPipeline intercepts failure and completes task using onException wisdom', async () => {
     const realAsker = new Asker({
         providers: {
             ollama: {id: 'ollama', host: ollamaHost, available: true},
