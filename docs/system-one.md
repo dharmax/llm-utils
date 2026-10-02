@@ -67,8 +67,7 @@ type SystemOneQuestion =
   | {
       type: 'score'
       instructions: string
-      min?: number
-      max?: number
+      criteria: string[] // ordered low → high rubric
     }
 
 interface SystemOne {
@@ -90,13 +89,16 @@ The first adapter is Laya.
 Requirements:
 
 - support in-process Laya when installed;
-- optionally support a remote System-1 endpoint through a small adapter/config seam;
-- fail closed to `null`/unavailable rather than forcing host failure;
-- expose raw calibrated answer probabilities;
+- support an optional remote System-1 endpoint through one tiny shared transport adapter so hosts do not duplicate HTTP glue;
+- lazy-load the in-process model only on first actual assessment;
+- fail closed to null/unavailable rather than forcing host failure;
+- expose raw calibrated answer probabilities/distributions and backend usage when available;
 - record latency;
 - do not hide model quality.
 
-`@receptron/laya` should be optional, not a mandatory heavy dependency for every llm-utils consumer. Prefer an optional peer/dynamic import unless implementation evidence shows another simpler packaging route.
+Laya's current local bundle is large (roughly 1.7 GB weights and about 2 GB RAM once loaded), so it must never become an eager or mandatory runtime cost for llm-utils consumers.
+
+@receptron/laya should be an optional peer/dynamic import. A configured remote engine may therefore be preferable on lightweight hosts.
 
 ## Quality
 
@@ -151,6 +153,8 @@ cheap graph/lexical/exact search
 ```
 
 The host must provide candidate labels/descriptions, not entire files.
+
+Laya's current English checkpoint has a small state budget (roughly 512 tokens) and recommends fewer than about 20 options per choice question. Hosts must therefore shortlist deterministically first and use System-1 only on a bounded candidate set.
 
 System-1 may shortlist candidates. It must not turn a relevance probability into canonical semantic truth.
 
