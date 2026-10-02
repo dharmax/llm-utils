@@ -18,9 +18,9 @@ Add the smallest backend-neutral types and `SystemOne` assessment interface.
 
 Required question shapes:
 
-- choice;
+- choice with named criteria;
 - noul;
-- score.
+- score with an ordered criteria rubric.
 
 Preserve calibrated probabilities/confidence in results.
 
@@ -34,10 +34,12 @@ Implement the smallest Laya adapter.
 
 Requirements:
 
-- in-process adapter via dynamic/optional dependency;
-- remote adapter only if it stays tiny and directly replaces duplicated ai-cli behavior;
+- in-process adapter via dynamic/optional dependency and lazy model load;
+- one tiny remote adapter/protocol that can replace duplicated ai-cli HTTP glue;
+- no eager model load during package import or ordinary non-System-1 use;
 - unavailable/timeouts return a non-fatal unavailable result;
 - quality grade exposed;
+- answer probabilities/distributions and usage preserved;
 - latency recorded.
 
 Do not duplicate ai-cli routing/safety questions in llm-utils.
@@ -49,7 +51,7 @@ Tests must prove:
 - multiple questions use one backend assessment;
 - choice probabilities preserved;
 - noul probability preserved;
-- score preserved;
+- score expected level/distribution preserved;
 - unavailable backend cleanly falls back;
 - malformed backend result does not fabricate an answer;
 - timeout is bounded;
