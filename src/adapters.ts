@@ -360,6 +360,13 @@ function isJsonFormat(format?: ResponseFormat): boolean {
     return typeof format === 'object' && (format.type === 'json' || format.type === 'json_schema' || Boolean(format.schema))
 }
 
+function hasDisallowedOpenAiSchema(schema: unknown): boolean {
+    if (!schema || typeof schema !== 'object') return false
+    const obj = schema as Record<string, unknown>
+    if ('oneOf' in obj) return true
+    return Object.values(obj).some(val => typeof val === 'object' && val !== null && hasDisallowedOpenAiSchema(val))
+}
+
 function toOpenAiFormat(format?: ResponseFormat): Record<string, unknown> | undefined {
     if (!format || format === 'text')
         return undefined
@@ -368,11 +375,14 @@ function toOpenAiFormat(format?: ResponseFormat): Record<string, unknown> | unde
     if (format === 'json' || (typeof format === 'object' && format.type === 'json' && !format.schema))
         return {type: 'json_object'}
     if (typeof format === 'object' && (format.type === 'json_schema' || format.schema)) {
+        const schema = (format.schema ?? {}) as Record<string, unknown>
+        if (schema.type !== 'object' || hasDisallowedOpenAiSchema(schema))
+            return {type: 'json_object'}
         return {
             type: 'json_schema',
             json_schema: {
                 name: format.name ?? 'structured_response',
-                schema: format.schema ?? {},
+                schema,
                 ...(format.strict !== undefined ? {strict: format.strict} : {}),
             },
         }
