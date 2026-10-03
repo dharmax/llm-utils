@@ -1,19 +1,61 @@
 import {PubSub} from '@dharmax/pubsub'
 import type {GenerationResult, Usage} from './types.ts'
 
-export interface LlmMetricEvent {
+export interface MetricsContext {
+    traceId: string
+    spanId?: string
+    parentSpanId?: string
+    taskClass?: string
+    tags?: Record<string, string | number | boolean>
+}
+
+export interface MetricBase {
+    kind: 'llm' | 'system1' | 'actor'
     timestamp: string
+    latencyMs: number
+    success: boolean
+    error?: string
+    traceId?: string
+    spanId?: string
+    parentSpanId?: string
+    taskClass?: string
+    tags?: Record<string, string | number | boolean>
+    metadata?: Record<string, unknown>
+}
+
+export interface LlmMetricEvent extends MetricBase {
+    kind: 'llm'
     providerId: string
     modelId: string
     promptTokens: number
     completionTokens: number
     totalTokens: number
-    latencyMs: number
-    success: boolean
-    error?: string
-    taskClass?: string
     costUsd?: number
-    metadata?: Record<string, unknown>
+    attempt?: number
+}
+
+export interface SystemOneMetricEvent extends MetricBase {
+    kind: 'system1'
+    backendId: string
+    quality: 'low' | 'medium' | 'high'
+    questionCount: number
+    questionTypes: string[]
+    available: boolean
+}
+
+export interface ActorMetricEvent extends MetricBase {
+    kind: 'actor'
+    steps: number
+    toolCalls: number
+    toolFailures: number
+    missingToolRecoveries: number
+    haltReason: string
+}
+
+export type MetricEvent = LlmMetricEvent | SystemOneMetricEvent | ActorMetricEvent
+
+export interface MetricsSink {
+    append(event: MetricEvent): void | Promise<void>
 }
 
 export interface MetricsQuery {
@@ -22,6 +64,8 @@ export interface MetricsQuery {
     providerId?: string
     modelId?: string
     taskClass?: string
+    traceId?: string
+    kind?: MetricEvent['kind']
     success?: boolean
     limit?: number
     order?: 'asc' | 'desc'
@@ -49,19 +93,19 @@ export interface UsagePricing {
     outputCostPerMillionTokensUsd?: number
 }
 
-export class InMemoryMetricsStore {
-    private events: LlmMetricEvent[] = []
+export class InMemoryMetricsStore implements MetricsSink {
+    private events: MetricEvent[] = []
 
-    constructor(options: {initialEvents?: LlmMetricEvent[]; maxEvents?: number} = {}) {
+    constructor(options: {initialEvents?: MetricEvent[]; maxEvents?: number} = {}) {
         if (options.initialEvents)
             this.events = [...options.initialEvents]
     }
 
-    append(event: LlmMetricEvent): void {
+    append(event: MetricEvent): void {
         this.events.push({...event})
     }
 
-    query(query: MetricsQuery = {}): LlmMetricEvent[] {
+    query(query: MetricsQuery = {}): MetricEvent[] {
         const fromMs = query.from ? Date.parse(query.from) : null
         const toMs = query.to ? Date.parse(query.to) : null
         const order = query.order ?? 'desc'
@@ -72,13 +116,17 @@ export class InMemoryMetricsStore {
                 return false
             if (toMs !== null && eventMs > toMs)
                 return false
-            if (query.providerId && event.providerId !== query.providerId)
+            if (query.kind && event.kind !== query.kind)
                 return false
-            if (query.modelId && event.modelId !== query.modelId)
+            if (query.traceId && event.traceId !== query.traceId)
                 return false
             if (query.taskClass && event.taskClass !== query.taskClass)
                 return false
             if (typeof query.success === 'boolean' && event.success !== query.success)
+                return false
+            if (query.providerId && (event.kind !== 'llm' || event.providerId !== query.providerId))
+                return false
+            if (query.modelId && (event.kind !== 'llm' || event.modelId !== query.modelId))
                 return false
             return true
         })
@@ -91,7 +139,30 @@ export class InMemoryMetricsStore {
         if (typeof query.limit === 'number' && query.limit >= 0)
             rows = rows.slice(0, query.limit)
 
-        return rows.map(r => ({...r}))
+        return rows.map(event => ({...event}))
+    }
+}
+
+export function emitMetric(sink: MetricsSink | undefined, event: MetricEvent): void {
+    if (!sink)
+        return
+    try {
+        const pending = sink.append(event)
+        if (pending && typeof pending.then === 'function')
+            void pending.catch(() => undefined)
+    } catch {
+        // Telemetry must never fail the measured operation.
+    }
+}
+
+export function childMetricsContext(
+    parent: MetricsContext,
+    spanId = crypto.randomUUID(),
+): MetricsContext {
+    return {
+        ...parent,
+        spanId,
+        parentSpanId: parent.spanId,
     }
 }
 
@@ -106,7 +177,7 @@ export class LlmMetrics {
         this.origin = options.origin ?? 'llm-metrics'
     }
 
-    record(event: Omit<LlmMetricEvent, 'totalTokens'> & {totalTokens?: number}): LlmMetricEvent {
+    record(event: Omit<LlmMetricEvent, 'kind' | 'totalTokens'> & {totalTokens?: number}): LlmMetricEvent {
         const promptTokens = Math.max(0, Number(event.promptTokens ?? 0))
         const completionTokens = Math.max(0, Number(event.completionTokens ?? 0))
         const totalTokens = Number.isFinite(event.totalTokens)
@@ -114,6 +185,8 @@ export class LlmMetrics {
             : promptTokens + completionTokens
 
         const normalized: LlmMetricEvent = {
+            ...event,
+            kind: 'llm',
             timestamp: event.timestamp || new Date().toISOString(),
             providerId: String(event.providerId),
             modelId: String(event.modelId),
@@ -122,9 +195,8 @@ export class LlmMetrics {
             totalTokens,
             latencyMs: Math.max(0, Number(event.latencyMs ?? 0)),
             success: Boolean(event.success),
-            error: event.error,
-            ...(event.taskClass ? {taskClass: event.taskClass} : {}),
             costUsd: Number.isFinite(event.costUsd) ? Number(event.costUsd) : 0,
+            ...(event.tags ? {tags: {...event.tags}} : {}),
             ...(event.metadata ? {metadata: {...event.metadata}} : {}),
         }
 
@@ -134,7 +206,7 @@ export class LlmMetrics {
     }
 
     list(query: MetricsQuery = {}): LlmMetricEvent[] {
-        return this.store.query(query)
+        return this.store.query({...query, kind: 'llm'}).filter((event): event is LlmMetricEvent => event.kind === 'llm')
     }
 
     totals(query: MetricsQuery = {}): AggregateMetrics {
@@ -150,16 +222,16 @@ export class LlmMetrics {
         let successes = 0
         let failures = 0
 
-        for (const e of events) {
-            if (e.success)
+        for (const event of events) {
+            if (event.success)
                 successes += 1
             else
                 failures += 1
-            totalPrompt += e.promptTokens
-            totalCompletion += e.completionTokens
-            totalTokens += e.totalTokens
-            totalLatency += e.latencyMs
-            totalCost += e.costUsd ?? 0
+            totalPrompt += event.promptTokens
+            totalCompletion += event.completionTokens
+            totalTokens += event.totalTokens
+            totalLatency += event.latencyMs
+            totalCost += event.costUsd ?? 0
         }
 
         const calls = events.length
@@ -182,31 +254,29 @@ export class LlmMetrics {
     }
 
     byProvider(query: MetricsQuery = {}): Array<{providerId: string; metrics: AggregateMetrics}> {
-        const events = this.list(query)
         const groups = new Map<string, LlmMetricEvent[]>()
-        for (const e of events) {
-            const list = groups.get(e.providerId) ?? []
-            list.push(e)
-            groups.set(e.providerId, list)
+        for (const event of this.list(query)) {
+            const list = groups.get(event.providerId) ?? []
+            list.push(event)
+            groups.set(event.providerId, list)
         }
-        return [...groups.entries()].map(([providerId, evts]) => {
-            const sub = new LlmMetrics(new InMemoryMetricsStore({initialEvents: evts}))
+        return [...groups.entries()].map(([providerId, events]) => {
+            const sub = new LlmMetrics(new InMemoryMetricsStore({initialEvents: events}))
             return {providerId, metrics: sub.totals()}
         })
     }
 
     byModel(query: MetricsQuery = {}): Array<{providerId: string; modelId: string; metrics: AggregateMetrics}> {
-        const events = this.list(query)
         const groups = new Map<string, LlmMetricEvent[]>()
-        for (const e of events) {
-            const key = `${e.providerId}::${e.modelId}`
+        for (const event of this.list(query)) {
+            const key = `${event.providerId}::${event.modelId}`
             const list = groups.get(key) ?? []
-            list.push(e)
+            list.push(event)
             groups.set(key, list)
         }
-        return [...groups.entries()].map(([key, evts]) => {
+        return [...groups.entries()].map(([key, events]) => {
             const [providerId, modelId] = key.split('::')
-            const sub = new LlmMetrics(new InMemoryMetricsStore({initialEvents: evts}))
+            const sub = new LlmMetrics(new InMemoryMetricsStore({initialEvents: events}))
             return {providerId: providerId ?? '', modelId: modelId ?? '', metrics: sub.totals()}
         })
     }
