@@ -4,6 +4,7 @@ import {type ContextRequest, type ContextResolver, resolveContext} from './conte
 import {FileTemplateSource, PromptEngine} from './prompts.ts'
 import {ProviderCircuit} from './provider-circuit.ts'
 import {ModelRouter} from './routing.ts'
+import {childMetricsContext, emitMetric, type MetricsSink} from './metrics.ts'
 import {
     parseStructuredJsonResult,
     resolveResponseFormat,
@@ -29,6 +30,7 @@ export interface AskerOptions {
     context?: ContextResolver
     contextResolver?: ContextResolver
     circuit?: ProviderCircuit
+    metricsSink?: MetricsSink
 }
 
 export class Asker {
@@ -39,6 +41,7 @@ export class Asker {
     private readonly circuit: ProviderCircuit
     private readonly defaultContext?: ContextResolver
     private readonly preferLocal: boolean
+    private readonly metricsSink?: MetricsSink
 
     constructor(options: AskerOptions = {}) {
         this.completion = options.completion ?? new CompletionEngine()
@@ -46,6 +49,7 @@ export class Asker {
         this.circuit = options.circuit ?? new ProviderCircuit()
         this.defaultContext = options.contextResolver ?? options.context
         this.preferLocal = Boolean(options.preferLocal)
+        this.metricsSink = options.metricsSink
 
         // Configure router
         this.router = options.router ?? new ModelRouter({
@@ -146,7 +150,12 @@ export class Asker {
             ? resolveResponseFormat(options.schema)
             : undefined
 
+        let attempt = 0
         const executeCall = async (callPrompt: string): Promise<GenerationResult<T>> => {
+            attempt += 1
+            const started = performance.now()
+            const parentMetrics = options.metrics
+            const callMetrics = parentMetrics ? childMetricsContext(parentMetrics) : undefined
             const res = await this.circuit.execute(target, () => this.completion.generate(
                 callPrompt,
                 target,
@@ -158,8 +167,27 @@ export class Asker {
                     signal: options.signal,
                     timeoutMs: options.timeoutMs,
                 },
-            ))
-            return res as GenerationResult<T>
+            )) as GenerationResult<T>
+            const usage = res.usage
+            emitMetric(options.metricsSink ?? this.metricsSink, {
+                kind: 'llm',
+                timestamp: new Date().toISOString(),
+                providerId: target.providerId,
+                modelId: target.modelId,
+                promptTokens: usage?.promptTokens ?? 0,
+                completionTokens: usage?.completionTokens ?? 0,
+                totalTokens: usage?.totalTokens ?? 0,
+                latencyMs: performance.now() - started,
+                success: res.ok,
+                error: res.failure?.message,
+                taskClass: callMetrics?.taskClass ?? options.task,
+                traceId: callMetrics?.traceId,
+                spanId: callMetrics?.spanId,
+                parentSpanId: callMetrics?.parentSpanId,
+                tags: callMetrics?.tags,
+                attempt,
+            })
+            return res
         }
 
         let effectivePrompt = prompt
