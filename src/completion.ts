@@ -16,6 +16,7 @@ import type {
 export interface CompletionOptions {
     system?: string
     temperature?: number
+    maxTokens?: number
     format?: ResponseFormat
     signal?: AbortSignal
     timeoutMs?: number
@@ -79,6 +80,7 @@ export class CompletionEngine {
             config,
             system: options.system,
             temperature: options.temperature,
+            maxTokens: options.maxTokens,
             format: options.format,
             signal: options.signal,
             timeoutMs: options.timeoutMs,

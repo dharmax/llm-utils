@@ -15,7 +15,7 @@ export class OpenAIAdapter implements ProviderAdapter {
     }
 
     async generate(options: GenerateOptions): Promise<GenerationResult> {
-        const {modelId, prompt, system, config, format, signal, timeoutMs, temperature} = options
+        const {modelId, prompt, system, config, format, signal, timeoutMs, temperature, maxTokens} = options
         if (!config.apiKey && !config.baseUrl)
             return missingApiKey(this.id, modelId)
 
@@ -45,6 +45,7 @@ export class OpenAIAdapter implements ProviderAdapter {
                 model: modelId,
                 messages,
                 temperature: temperature ?? 0.1,
+                max_tokens: maxTokens ?? 4096,
                 ...(responseFormat ? {response_format: responseFormat} : {}),
             },
             signal,

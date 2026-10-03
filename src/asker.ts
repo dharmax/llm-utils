@@ -163,6 +163,7 @@ export class Asker {
                 {
                     system: options.system,
                     temperature: options.temperature,
+                    maxTokens: options.maxTokens,
                     format,
                     signal: options.signal,
                     timeoutMs: options.timeoutMs,

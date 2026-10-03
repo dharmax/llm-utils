@@ -86,6 +86,7 @@ export interface GenerateOptions {
     config: ProviderConfig
     format?: ResponseFormat
     temperature?: number
+    maxTokens?: number
     signal?: AbortSignal
     timeoutMs?: number
 }
@@ -106,6 +107,7 @@ export interface AskOptions<T = unknown> {
     schema?: ZodType<T>
     system?: string
     temperature?: number
+    maxTokens?: number
     preferLocal?: boolean
     signal?: AbortSignal
     timeoutMs?: number
