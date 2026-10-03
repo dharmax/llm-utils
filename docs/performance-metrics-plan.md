@@ -6,6 +6,8 @@ This is a llm-utils-owned development flow.
 
 # LLMUTILS-PERFORMANCE-METRICS
 
+Status: implementation present on master; verify typecheck/tests/build before consuming from AIWF.
+
 ## Start
 
 1. use the package's normal dev flow;
