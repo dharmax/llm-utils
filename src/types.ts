@@ -1,5 +1,6 @@
 import type {ZodType} from 'zod'
 import type {ContextRequest, ContextResolver} from './context.ts'
+import type {MetricsContext, MetricsSink} from './metrics.ts'
 
 export type ProviderId = string
 
@@ -111,4 +112,6 @@ export interface AskOptions<T = unknown> {
     maxRetries?: number
     providerConfig?: ProviderConfig
     context?: ContextRequest | ContextResolver
+    metrics?: MetricsContext
+    metricsSink?: MetricsSink
 }
