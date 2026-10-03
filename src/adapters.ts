@@ -20,10 +20,13 @@ export class OpenAIAdapter implements ProviderAdapter {
             return missingApiKey(this.id, modelId)
 
         const baseUrl = (config.baseUrl ?? 'https://api.openai.com/v1').replace(/\/+$/, '')
-        const responseFormat = toOpenAiFormat(format)
-        const effectivePrompt = (responseFormat?.type === 'json_object' && !/json/i.test(prompt) && !(system && /json/i.test(system)))
-            ? `${prompt}\n\nRespond with valid JSON.`
-            : prompt
+        const {responseFormat, fallbackSchema} = toOpenAiFormat(format)
+        let effectivePrompt = prompt
+        if (fallbackSchema) {
+            effectivePrompt = `${prompt}\n\nYou MUST respond with valid JSON adhering to this JSON Schema:\n${JSON.stringify(fallbackSchema, null, 2)}`
+        } else if (responseFormat?.type === 'json_object' && !/json/i.test(prompt) && !(system && /json/i.test(system))) {
+            effectivePrompt = `${prompt}\n\nRespond with valid JSON.`
+        }
         const messages = [
             ...(system ? [{role: 'system', content: system}] : []),
             {role: 'user', content: effectivePrompt},
@@ -367,28 +370,36 @@ function hasDisallowedOpenAiSchema(schema: unknown): boolean {
     if (!schema || typeof schema !== 'object') return false
     const obj = schema as Record<string, unknown>
     if ('oneOf' in obj) return true
+    if (obj.type === 'object' && obj.properties) {
+        const props = Object.keys(obj.properties as object)
+        const req = Array.isArray(obj.required) ? obj.required : []
+        if (!props.every(p => req.includes(p))) return true
+    }
     return Object.values(obj).some(val => typeof val === 'object' && val !== null && hasDisallowedOpenAiSchema(val))
 }
 
-function toOpenAiFormat(format?: ResponseFormat): Record<string, unknown> | undefined {
+function toOpenAiFormat(format?: ResponseFormat): { responseFormat?: Record<string, unknown>; fallbackSchema?: Record<string, unknown> } {
     if (!format || format === 'text')
-        return undefined
+        return {}
     if (typeof format === 'object' && format.type === 'text' && !format.schema)
-        return undefined
+        return {}
     if (format === 'json' || (typeof format === 'object' && format.type === 'json' && !format.schema))
-        return {type: 'json_object'}
+        return {responseFormat: {type: 'json_object'}}
     if (typeof format === 'object' && (format.type === 'json_schema' || format.schema)) {
         const schema = (format.schema ?? {}) as Record<string, unknown>
-        if (schema.type !== 'object' || hasDisallowedOpenAiSchema(schema))
-            return {type: 'json_object'}
+        const isStrict = format.strict ?? false
+        if (schema.type !== 'object' || (isStrict && hasDisallowedOpenAiSchema(schema)))
+            return {responseFormat: {type: 'json_object'}, fallbackSchema: schema}
         return {
-            type: 'json_schema',
-            json_schema: {
-                name: format.name ?? 'structured_response',
-                schema,
-                ...(format.strict !== undefined ? {strict: format.strict} : {}),
-            },
+            responseFormat: {
+                type: 'json_schema',
+                json_schema: {
+                    name: format.name ?? 'structured_response',
+                    schema,
+                    ...(isStrict ? {strict: true} : {}),
+                },
+            }
         }
     }
-    return undefined
+    return {}
 }
