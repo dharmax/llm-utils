@@ -58,10 +58,14 @@
     "zod": "^4.4.3"
   },
   "peerDependencies": {
-    "@dharmax/shell-proc-utils": ">=0.1.0"
+    "@dharmax/shell-proc-utils": ">=0.1.0",
+    "@receptron/laya": "^0.1.2"
   },
   "peerDependenciesMeta": {
     "@dharmax/shell-proc-utils": {
+      "optional": true
+    },
+    "@receptron/laya": {
       "optional": true
     }
   },
