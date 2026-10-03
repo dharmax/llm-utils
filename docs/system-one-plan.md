@@ -69,13 +69,11 @@ bun run build
 
 Then method-by-method KISS audit.
 
-### Step 4 — ai-cli migration is separate
+### Step 4 — migrate proven consumer
 
-Do **not** mutate ai-cli in this ticket.
+Migrate ai-cli to the shared primitive while keeping its question set, answer interpretation and safety policy host-owned. Preserve local/remote fallback behavior and keep `@receptron/laya` installed only in hosts that actually want local Laya.
 
-After llm-utils publishes the primitive, ai-cli gets its own small migration ticket to replace generic wrapper/config types while keeping its question set and safety policy.
-
-AIWF may consume the shared primitive after this gate is green.
+AIWF and other consumers may use the shared primitive after this gate is green. Do not force System-1 into packages that merely depend on llm-utils; adopt it only at genuine cheap-classification/ranking boundaries.
 
 ## Rejection criteria
 
