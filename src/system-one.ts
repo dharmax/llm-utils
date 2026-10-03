@@ -1,3 +1,5 @@
+import {childMetricsContext, emitMetric, type MetricsContext, type MetricsSink} from './metrics.ts'
+
 export type SystemOneQuality = 'low' | 'medium' | 'high'
 
 export type SystemOneQuestion =
@@ -32,10 +34,16 @@ export interface SystemOneAssessment {
   readonly usage?: Readonly<Record<string, unknown>>
 }
 
+export interface SystemOneAssessOptions {
+  readonly metrics?: MetricsContext
+  readonly metricsSink?: MetricsSink
+}
+
 export interface SystemOne {
   assess(
     state: Readonly<Record<string, unknown>>,
     questions: Readonly<Record<string, SystemOneQuestion>>,
+    options?: SystemOneAssessOptions,
   ): Promise<SystemOneAssessment | null>
 }
 
@@ -53,6 +61,7 @@ export class RemoteSystemOne implements SystemOne {
   async assess(
     state: Readonly<Record<string, unknown>>,
     questions: Readonly<Record<string, SystemOneQuestion>>,
+    options: SystemOneAssessOptions = {},
   ): Promise<SystemOneAssessment | null> {
     const started = performance.now()
     const controller = new AbortController()
@@ -68,28 +77,56 @@ export class RemoteSystemOne implements SystemOne {
           signal: controller.signal,
         },
       )
-      if (!response.ok) return null
+      if (!response.ok) {
+        this.record(options, questions, started, false, false, `HTTP ${response.status}`)
+        return null
+      }
 
       const body = await response.json() as {
         answers?: Record<string, SystemOneAnswer>
         usage?: Record<string, unknown>
         ok?: boolean
       }
-      if (body.ok === false || !body.answers || typeof body.answers !== 'object')
+      if (body.ok === false || !body.answers || typeof body.answers !== 'object') {
+        this.record(options, questions, started, false, false, 'Malformed System-1 response')
         return null
+      }
 
-      return {
+      const result = {
         answers: body.answers,
         backendId: this.options.id ?? 'remote-system-one',
         quality: this.options.quality ?? 'low',
         latencyMs: performance.now() - started,
         ...(body.usage ? {usage: body.usage} : {}),
-      }
-    } catch {
+      } satisfies SystemOneAssessment
+      this.record(options, questions, started, true, true)
+      return result
+    } catch (error) {
+      this.record(options, questions, started, false, false, error instanceof Error ? error.message : String(error))
       return null
     } finally {
       clearTimeout(timer)
     }
+  }
+
+  private record(
+    options: SystemOneAssessOptions,
+    questions: Readonly<Record<string, SystemOneQuestion>>,
+    started: number,
+    success: boolean,
+    available: boolean,
+    error?: string,
+  ): void {
+    recordSystemOneMetric(
+      options,
+      this.options.id ?? 'remote-system-one',
+      this.options.quality ?? 'low',
+      questions,
+      performance.now() - started,
+      success,
+      available,
+      error,
+    )
   }
 }
 
@@ -140,23 +177,41 @@ export class LayaSystemOne implements SystemOne {
   async assess(
     state: Readonly<Record<string, unknown>>,
     questions: Readonly<Record<string, SystemOneQuestion>>,
+    options: SystemOneAssessOptions = {},
   ): Promise<SystemOneAssessment | null> {
-    const laya = await (this.options.load ?? loadLaya)()
-    if (!laya) return null
-
     const started = performance.now()
+    const laya = await (this.options.load ?? loadLaya)()
+    if (!laya) {
+      recordSystemOneMetric(
+        options,
+        this.options.id ?? 'laya',
+        this.options.quality ?? 'low',
+        questions,
+        performance.now() - started,
+        false,
+        false,
+        'Laya unavailable',
+      )
+      return null
+    }
     try {
       const result = await laya.systemOne(state, questions)
-      if (!result?.answers || typeof result.answers !== 'object') return null
+      if (!result?.answers || typeof result.answers !== 'object') {
+        recordSystemOneMetric(options, this.options.id ?? 'laya', this.options.quality ?? 'low', questions, performance.now() - started, false, true, 'Malformed System-1 response')
+        return null
+      }
 
-      return {
+      const assessment = {
         answers: result.answers,
         backendId: this.options.id ?? 'laya',
         quality: this.options.quality ?? 'low',
         latencyMs: performance.now() - started,
         ...(result.usage ? {usage: result.usage} : {}),
-      }
-    } catch {
+      } satisfies SystemOneAssessment
+      recordSystemOneMetric(options, assessment.backendId, assessment.quality, questions, assessment.latencyMs, true, true)
+      return assessment
+    } catch (error) {
+      recordSystemOneMetric(options, this.options.id ?? 'laya', this.options.quality ?? 'low', questions, performance.now() - started, false, true, error instanceof Error ? error.message : String(error))
       return null
     }
   }
@@ -168,11 +223,43 @@ export class FallbackSystemOne implements SystemOne {
   async assess(
     state: Readonly<Record<string, unknown>>,
     questions: Readonly<Record<string, SystemOneQuestion>>,
+    options: SystemOneAssessOptions = {},
   ): Promise<SystemOneAssessment | null> {
     for (const backend of this.backends) {
-      const result = await backend.assess(state, questions)
+      const result = await backend.assess(state, questions, options)
       if (result) return result
     }
     return null
   }
+}
+
+
+function recordSystemOneMetric(
+  options: SystemOneAssessOptions,
+  backendId: string,
+  quality: SystemOneQuality,
+  questions: Readonly<Record<string, SystemOneQuestion>>,
+  latencyMs: number,
+  success: boolean,
+  available: boolean,
+  error?: string,
+): void {
+  const metrics = options.metrics ? childMetricsContext(options.metrics) : undefined
+  emitMetric(options.metricsSink, {
+    kind: 'system1',
+    timestamp: new Date().toISOString(),
+    backendId,
+    quality,
+    questionCount: Object.keys(questions).length,
+    questionTypes: [...new Set(Object.values(questions).map(question => question.type))],
+    available,
+    latencyMs,
+    success,
+    error,
+    traceId: metrics?.traceId,
+    spanId: metrics?.spanId,
+    parentSpanId: metrics?.parentSpanId,
+    taskClass: metrics?.taskClass,
+    tags: metrics?.tags,
+  })
 }
