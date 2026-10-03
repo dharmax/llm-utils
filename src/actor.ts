@@ -4,6 +4,7 @@ import type {Asker} from './asker.ts'
 import {type ContextResolver, resolveContext} from './context.ts'
 import {parseStructuredJsonResult, zodToJsonSchema} from './structured-json.ts'
 import type {AskOptions} from './types.ts'
+import {childMetricsContext, emitMetric, type MetricsContext, type MetricsSink} from './metrics.ts'
 
 export interface ToolDefinition<TParams = any, TResult = any> {
     name: string
@@ -24,6 +25,7 @@ export interface ToolExecutionResult {
     result?: unknown
     error?: string
     isError: boolean
+    recoveredMissingTool?: boolean
 }
 
 export interface ActorStepRecord {
@@ -59,6 +61,8 @@ export interface ActorOptions {
         parameters: Record<string, unknown>,
         context?: unknown
     ) => Promise<ToolExecutionResult | ToolDefinition | undefined> | ToolExecutionResult | ToolDefinition | undefined
+    metrics?: MetricsContext
+    metricsSink?: MetricsSink
 }
 
 export interface ActorRunOptions<T = unknown> {
@@ -312,16 +316,18 @@ export class LLMActor {
 
         for (const call of toolCalls) {
             let tool = tools.get(call.toolName)
+            let recoveredMissingTool = false
             if (!tool && missingToolHandler) {
                 try {
                     const fallback = await missingToolHandler(call.toolName, call.parameters, context)
                     if (fallback) {
                         if ('isError' in fallback && typeof fallback.isError === 'boolean') {
-                            toolResults.push(fallback as ToolExecutionResult)
+                            toolResults.push({...fallback as ToolExecutionResult, recoveredMissingTool: !fallback.isError})
                             continue
                         }
                         if ('execute' in fallback && typeof (fallback as any).execute === 'function') {
                             tool = fallback as ToolDefinition
+                            recoveredMissingTool = true
                             if (runLocalTools) {
                                 tools.set(tool.name, tool)
                             } else {
@@ -374,6 +380,7 @@ export class LLMActor {
                     toolName: call.toolName,
                     isError: false,
                     result: execResult,
+                    ...(recoveredMissingTool ? {recoveredMissingTool: true} : {}),
                 })
             } catch (err) {
                 toolResults.push({
@@ -406,6 +413,39 @@ export class LLMActor {
         const max = options.maxSteps ?? this.maxSteps
         const steps: ActorStepRecord[] = []
         const signal = options.signal
+        const started = performance.now()
+        const parentMetrics = options.metrics ?? options.askOptions?.metrics
+        const runMetrics = parentMetrics ? childMetricsContext(parentMetrics) : undefined
+        const metricsSink = options.metricsSink ?? options.askOptions?.metricsSink
+        const runAskOptions: AskOptions | undefined = (options.askOptions || runMetrics || metricsSink)
+            ? {
+                ...options.askOptions,
+                ...(runMetrics ? {metrics: runMetrics} : {}),
+                ...(metricsSink ? {metricsSink} : {}),
+            }
+            : undefined
+
+        const finish = (result: ActorRunResult<T>): ActorRunResult<T> => {
+            const toolResults = steps.flatMap(step => step.toolResults)
+            emitMetric(metricsSink, {
+                kind: 'actor',
+                timestamp: new Date().toISOString(),
+                latencyMs: performance.now() - started,
+                success: result.ok,
+                error: result.error,
+                steps: result.totalSteps,
+                toolCalls: steps.reduce((sum, step) => sum + step.toolCalls.length, 0),
+                toolFailures: toolResults.filter(item => item.isError).length,
+                missingToolRecoveries: toolResults.filter(item => item.recoveredMissingTool).length,
+                haltReason: result.haltReason,
+                traceId: runMetrics?.traceId,
+                spanId: runMetrics?.spanId,
+                parentSpanId: runMetrics?.parentSpanId,
+                taskClass: runMetrics?.taskClass,
+                tags: runMetrics?.tags,
+            })
+            return result
+        }
         const runLocalTools = options.tools !== undefined
         const tools = runLocalTools
             ? new Map(options.tools!.map(tool => [tool.name, tool] as const))
@@ -423,21 +463,21 @@ export class LLMActor {
 
         while (steps.length < max) {
             if (signal?.aborted) {
-                return {
+                return finish({
                     ok: false,
                     finalText: '',
                     steps,
                     totalSteps: steps.length,
                     haltReason: 'aborted',
                     error: 'Execution aborted by signal.',
-                }
+                })
             }
 
             const stepResult = await this.executeStep(
                 effectiveGoal,
                 steps,
                 options.context,
-                options.askOptions,
+                runAskOptions,
                 tools,
                 runLocalTools,
                 options.onMissingTool,
@@ -454,14 +494,14 @@ export class LLMActor {
             }
 
             if (stepResult.error) {
-                return {
+                return finish({
                     ok: false,
                     finalText: '',
                     steps,
                     totalSteps: steps.length,
                     haltReason: 'error',
                     error: stepResult.error,
-                }
+                })
             }
 
             if (stepResult.isDone) {
@@ -476,32 +516,32 @@ export class LLMActor {
                         const repair = await this.asker.json(
                             `Extract and format the required structured JSON based on the goal and observations.\n\nGoal: ${effectiveGoal}\n\nObservations/Answer:\n${finalText}`,
                             options.schema,
-                            options.askOptions,
+                            runAskOptions,
                         )
                         if (repair.ok && repair.data)
                             output = repair.data
                     }
                 }
 
-                return {
+                return finish({
                     ok: true,
                     output,
                     finalText,
                     steps,
                     totalSteps: steps.length,
                     haltReason: 'completed',
-                }
+                })
             }
         }
 
-        return {
+        return finish({
             ok: false,
             finalText: '',
             steps,
             totalSteps: steps.length,
             haltReason: 'max_steps_exceeded',
             error: `Exceeded maximum step budget of ${max} steps without reaching a final answer.`,
-        }
+        })
     }
 
     private renderToolCatalog(toolMap: ReadonlyMap<string, ToolDefinition>): string {
