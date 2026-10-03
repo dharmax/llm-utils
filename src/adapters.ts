@@ -21,9 +21,12 @@ export class OpenAIAdapter implements ProviderAdapter {
 
         const baseUrl = (config.baseUrl ?? 'https://api.openai.com/v1').replace(/\/+$/, '')
         const responseFormat = toOpenAiFormat(format)
+        const effectivePrompt = (responseFormat?.type === 'json_object' && !/json/i.test(prompt) && !(system && /json/i.test(system)))
+            ? `${prompt}\n\nRespond with valid JSON.`
+            : prompt
         const messages = [
             ...(system ? [{role: 'system', content: system}] : []),
-            {role: 'user', content: prompt},
+            {role: 'user', content: effectivePrompt},
         ]
 
         const headers: Record<string, string> = {}
