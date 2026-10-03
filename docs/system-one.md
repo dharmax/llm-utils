@@ -1,6 +1,6 @@
 # System-1 — Design
 
-Status: target design for a shared fast semantic-assessment primitive.
+Status: implemented shared fast semantic-assessment primitive; hosts retain domain policy.
 
 ## Purpose
 
@@ -168,8 +168,6 @@ System-1 is an optimization layer, never a correctness dependency.
 
 ## Existing ai-cli code
 
-`ai-cli/src/laya.ts` currently proves the concept but owns generic machinery that should be shared.
-
-After this primitive is implemented, ai-cli should consume it and retain only its domain-specific question set/policy.
+`ai-cli/src/laya.ts` was the proving implementation. Its generic local/remote/fallback machinery now lives here; ai-cli retains its domain-specific question set, answer interpretation, thresholds and safety policy.
 
 Do not make ai-cli a dependency of llm-utils or AIWF.
