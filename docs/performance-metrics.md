@@ -1,6 +1,6 @@
 # Performance Metrics — Design
 
-Status: target design for shared model/System-1/actor telemetry used by hosts such as AIWF.
+Status: implemented shared model/System-1/actor correlation and telemetry substrate; hosts own workflow summaries/persistence.
 
 ## 1. Purpose
 
