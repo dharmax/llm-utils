@@ -61,8 +61,6 @@ export interface ActorOptions {
         parameters: Record<string, unknown>,
         context?: unknown
     ) => Promise<ToolExecutionResult | ToolDefinition | undefined> | ToolExecutionResult | ToolDefinition | undefined
-    metrics?: MetricsContext
-    metricsSink?: MetricsSink
 }
 
 export interface ActorRunOptions<T = unknown> {
@@ -80,6 +78,8 @@ export interface ActorRunOptions<T = unknown> {
         parameters: Record<string, unknown>,
         context?: unknown
     ) => Promise<ToolExecutionResult | ToolDefinition | undefined> | ToolExecutionResult | ToolDefinition | undefined
+    metrics?: MetricsContext
+    metricsSink?: MetricsSink
 }
 
 export interface ActorStepResult {
