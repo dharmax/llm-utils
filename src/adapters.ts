@@ -15,7 +15,7 @@ export class OpenAIAdapter implements ProviderAdapter {
     }
 
     async generate(options: GenerateOptions): Promise<GenerationResult> {
-        const {modelId, prompt, system, config, format, signal, timeoutMs, temperature, maxTokens} = options
+        const {modelId, prompt, system, config, format, signal, timeoutMs, temperature, maxTokens, providerOptions} = options
         if (!config.apiKey && !config.baseUrl)
             return missingApiKey(this.id, modelId)
 
@@ -42,6 +42,8 @@ export class OpenAIAdapter implements ProviderAdapter {
             url: `${baseUrl}/chat/completions`,
             headers,
             body: {
+                ...(config.providerOptions ?? {}),
+                ...(providerOptions ?? {}),
                 model: modelId,
                 messages,
                 temperature: temperature ?? 0.1,
@@ -67,7 +69,7 @@ export class AnthropicAdapter implements ProviderAdapter {
     readonly id = 'anthropic'
 
     async generate(options: GenerateOptions): Promise<GenerationResult> {
-        const {modelId, prompt, system, config, format, signal, timeoutMs, temperature, maxTokens} = options
+        const {modelId, prompt, system, config, format, signal, timeoutMs, temperature, maxTokens, providerOptions} = options
         if (!config.apiKey)
             return missingApiKey(this.id, modelId)
 
@@ -94,6 +96,8 @@ export class AnthropicAdapter implements ProviderAdapter {
                 'anthropic-version': '2023-06-01',
             },
             body: {
+                ...(config.providerOptions ?? {}),
+                ...(providerOptions ?? {}),
                 model: modelId,
                 messages: [{role: 'user', content: prompt}],
                 system: effectiveSystem || undefined,
@@ -126,7 +130,7 @@ export class GoogleAdapter implements ProviderAdapter {
     readonly id = 'google'
 
     async generate(options: GenerateOptions): Promise<GenerationResult> {
-        const {modelId, prompt, system, config, format, signal, timeoutMs, temperature, maxTokens} = options
+        const {modelId, prompt, system, config, format, signal, timeoutMs, temperature, maxTokens, providerOptions} = options
         if (!config.apiKey)
             return missingApiKey(this.id, modelId)
 
@@ -143,6 +147,8 @@ export class GoogleAdapter implements ProviderAdapter {
             body: {
                 contents: [{role: 'user', parts: [{text: prompt}]}],
                 generationConfig: {
+                    ...(config.providerOptions ?? {}),
+                    ...(providerOptions ?? {}),
                     temperature: temperature ?? 0.1,
                     maxOutputTokens: maxTokens ?? 4096,
                     ...(isJson ? {responseMimeType: 'application/json'} : {}),
