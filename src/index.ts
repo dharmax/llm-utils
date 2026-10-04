@@ -1,3 +1,4 @@
+export * from './version.ts'
 export {z} from 'zod'
 export type {ZodError, ZodIssue, ZodType} from 'zod'
 export * from './types.ts'
