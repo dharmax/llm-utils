@@ -100,6 +100,59 @@ const codeRes = await asker.ask('Write TypeScript debounce', { task: 'code' })
 const exactRes = await asker.ask('Analyze log trace', { model: 'openai/gpt-4o' })
 ```
 
+### Provider/model parameters
+
+Common controls stay typed:
+
+```ts
+await asker.ask('...', {
+  contextWindow: 32768,
+  maxTokens: 4096,
+  temperature: 0.2,
+})
+```
+
+Provider-specific model/runtime knobs use `providerOptions`:
+
+```ts
+await asker.ask('...', {
+  model: 'ollama/qwen2.5-coder:7b',
+  contextWindow: 32768,
+  maxTokens: 4096,
+  providerOptions: {
+    top_k: 40,
+    top_p: 0.9,
+    repeat_penalty: 1.1,
+    seed: 42,
+  },
+})
+```
+
+Provider defaults can also be configured once:
+
+```ts
+const asker = new Asker({
+  providers: {
+    ollama: {
+      id: 'ollama',
+      host: 'http://127.0.0.1:11434',
+      contextWindow: 32768,
+      providerOptions: {
+        top_k: 40,
+        top_p: 0.9,
+      },
+    },
+  },
+  defaultModel: 'ollama/qwen2.5-coder:7b',
+})
+```
+
+For Ollama, `providerOptions` are sent inside the native `options` object. The same escape hatch is passed at the natural request level by the other built-in adapters.
+
+Typed controls have precedence over raw provider values: `contextWindow` controls Ollama `num_ctx`, `maxTokens` controls `num_predict`, and `temperature` controls `temperature`.
+
+Do not put credentials or prompt/source content in `providerOptions`; it is intended only for model/runtime parameters.
+
 ### 2. Typed Structured JSON (`asker.json()`)
 
 `asker.json()` combines three safety nets:
