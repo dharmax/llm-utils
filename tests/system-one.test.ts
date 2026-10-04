@@ -84,6 +84,70 @@ describe('SystemOne', () => {
     expect(result?.quality).toBe('low')
   })
 
+  it('preserves the full Jev-compatible System-One question and answer surface', async () => {
+    const richQuestions: Record<string, SystemOneQuestion> = {
+      route: {
+        type: 'choice',
+        instructions: { task: 'Pick a route', constraints: ['fast'] },
+        criteria: {
+          fast: null,
+          deep: { description: 'Use deeper analysis', cost: 'higher' },
+        },
+      },
+      severity: {
+        type: 'score',
+        instructions: ['Rate', 'severity'],
+        criteria: ['low', { label: 'medium' }, null],
+      },
+      safe: {
+        type: 'noul',
+        instructions: null,
+        criteria: {
+          true: 'Safe to proceed',
+          false: { reason: 'Needs review' },
+        },
+      },
+    }
+
+    let request: any
+    const systemOne = new JevSystemOne({
+      load: async () => ({
+        async systemOne(receivedRequest) {
+          request = receivedRequest
+          return {
+            model: 'jev-1.13.0',
+            answers: {
+              route: {
+                type: 'choice',
+                choice: 'deep',
+                confidence: 0.8,
+                probabilities: { fast: 0.2, deep: 0.8 },
+              },
+              severity: {
+                type: 'score',
+                score: 1.4,
+                confidence: 0.7,
+                legend: { 0: 'low', 1: { label: 'medium' }, 2: null },
+                probabilities: { 0: 0.1, 1: 0.4, 2: 0.5 },
+              },
+              safe: { type: 'noul', noul: 0.91 },
+            },
+          }
+        },
+      }),
+    })
+
+    const state = ['request', { nested: true }, null]
+    const result = await systemOne.assess(state, richQuestions)
+
+    expect(request).toEqual({ state, questions: richQuestions })
+    expect(result?.model).toBe('jev-1.13.0')
+    expect(result?.answers.route?.confidence).toBe(0.8)
+    expect(result?.answers.severity?.legend?.['1']).toEqual({ label: 'medium' })
+    expect(result?.answers.severity?.score).toBe(1.4)
+    expect(result?.answers.safe?.noul).toBe(0.91)
+  })
+
   it('returns null when Jev is unavailable or malformed', async () => {
     expect(await new JevSystemOne({load: async () => null}).assess({}, questions)).toBeNull()
     expect(await new JevSystemOne({
