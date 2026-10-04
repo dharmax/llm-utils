@@ -130,6 +130,110 @@ export class RemoteSystemOne implements SystemOne {
   }
 }
 
+export interface JevSystemOneOptions {
+  readonly id?: string
+  readonly quality?: SystemOneQuality
+  readonly model?: string
+  readonly apiKey?: string
+  readonly baseURL?: string
+  readonly timeoutMs?: number
+  readonly load?: () => Promise<JevLike | null>
+}
+
+interface JevLike {
+  systemOne(
+    request: {
+      state: Readonly<Record<string, unknown>>
+      questions: Readonly<Record<string, SystemOneQuestion>>
+      model?: string
+    },
+    options?: {timeout?: number},
+  ): Promise<{
+    answers?: Record<string, SystemOneAnswer>
+    usage?: Record<string, unknown>
+  }>
+}
+
+/**
+ * TypeSafe AI / Jev backend. The SDK is optional and loaded only when this
+ * backend is used, keeping llm-utils free of a mandatory cloud dependency.
+ */
+export class JevSystemOne implements SystemOne {
+  private client?: Promise<JevLike | null>
+
+  constructor(private readonly options: JevSystemOneOptions = {}) {}
+
+  async assess(
+    state: Readonly<Record<string, unknown>>,
+    questions: Readonly<Record<string, SystemOneQuestion>>,
+    options: SystemOneAssessOptions = {},
+  ): Promise<SystemOneAssessment | null> {
+    const started = performance.now()
+    const client = await (this.options.load ? this.options.load() : this.loadClient())
+    if (!client) {
+      recordSystemOneMetric(
+        options,
+        this.options.id ?? 'jev',
+        this.options.quality ?? 'high',
+        questions,
+        performance.now() - started,
+        false,
+        false,
+        'TypeSafe AI SDK unavailable',
+      )
+      return null
+    }
+
+    try {
+      const result = await client.systemOne(
+        {
+          state,
+          questions,
+          ...(this.options.model ? {model: this.options.model} : {}),
+        },
+        this.options.timeoutMs ? {timeout: this.options.timeoutMs} : undefined,
+      )
+      if (!result?.answers || typeof result.answers !== 'object') {
+        recordSystemOneMetric(options, this.options.id ?? 'jev', this.options.quality ?? 'high', questions, performance.now() - started, false, true, 'Malformed Jev response')
+        return null
+      }
+
+      const assessment = {
+        answers: result.answers,
+        backendId: this.options.id ?? 'jev',
+        quality: this.options.quality ?? 'high',
+        latencyMs: performance.now() - started,
+        ...(result.usage ? {usage: result.usage} : {}),
+      } satisfies SystemOneAssessment
+      recordSystemOneMetric(options, assessment.backendId, assessment.quality, questions, assessment.latencyMs, true, true)
+      return assessment
+    } catch (error) {
+      recordSystemOneMetric(options, this.options.id ?? 'jev', this.options.quality ?? 'high', questions, performance.now() - started, false, true, error instanceof Error ? error.message : String(error))
+      return null
+    }
+  }
+
+  private loadClient(): Promise<JevLike | null> {
+    if (this.client) return this.client
+    this.client = (async () => {
+      try {
+        const dynamicImport = new Function('specifier', 'return import(specifier)') as
+          (specifier: string) => Promise<{TypeSafeClient?: new (config?: Record<string, unknown>) => JevLike}>
+        const module = await dynamicImport('@typesafe-ai/sdk')
+        if (!module.TypeSafeClient) return null
+        return new module.TypeSafeClient({
+          ...(this.options.apiKey ? {apiKey: this.options.apiKey} : {}),
+          ...(this.options.baseURL ? {baseURL: this.options.baseURL} : {}),
+          ...(this.options.model ? {defaultModel: this.options.model} : {}),
+        })
+      } catch {
+        return null
+      }
+    })()
+    return this.client
+  }
+}
+
 export interface LayaSystemOneOptions {
   readonly id?: string
   readonly quality?: SystemOneQuality
