@@ -17,6 +17,8 @@ export interface CompletionOptions {
     system?: string
     temperature?: number
     maxTokens?: number
+    contextWindow?: number
+    providerOptions?: Record<string, unknown>
     format?: ResponseFormat
     signal?: AbortSignal
     timeoutMs?: number
@@ -81,6 +83,8 @@ export class CompletionEngine {
             system: options.system,
             temperature: options.temperature,
             maxTokens: options.maxTokens,
+            contextWindow: options.contextWindow,
+            providerOptions: options.providerOptions,
             format: options.format,
             signal: options.signal,
             timeoutMs: options.timeoutMs,
