@@ -58,4 +58,53 @@ describe('provider output budgets and finish reasons', () => {
         expect(google.finishReason).toBe('MAX_TOKENS')
         expect(ollama.finishReason).toBe('length')
     })
+
+    it('passes arbitrary Ollama model options while typed controls win', async () => {
+        let body: any
+        globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+            body = JSON.parse(String(init?.body ?? '{}'))
+            return Response.json({
+                message: {content: 'ok'},
+                done_reason: 'stop',
+                prompt_eval_count: 1,
+                eval_count: 1,
+            })
+        }) as typeof fetch
+
+        await new OllamaProvider().generate({
+            modelId: 'qwen-test',
+            prompt: 'x',
+            config: {
+                id: 'ollama',
+                host: 'http://ollama.test',
+                contextWindow: 8192,
+                providerOptions: {
+                    top_k: 20,
+                    repeat_penalty: 1.05,
+                    num_ctx: 1024,
+                    num_predict: 10,
+                },
+            },
+            contextWindow: 32768,
+            maxTokens: 777,
+            temperature: 0.2,
+            providerOptions: {
+                top_p: 0.9,
+                seed: 42,
+                num_ctx: 2048,
+                temperature: 0.8,
+            },
+        })
+
+        expect(body.options).toMatchObject({
+            top_k: 20,
+            top_p: 0.9,
+            repeat_penalty: 1.05,
+            seed: 42,
+            num_ctx: 32768,
+            num_predict: 777,
+            temperature: 0.2,
+        })
+    })
+
 })
