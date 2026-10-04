@@ -71,8 +71,10 @@ export interface ProviderConfig {
     available?: boolean
     models?: ModelInfo[]
     local?: boolean
-    /** Ollama context capacity in tokens; omitted preserves the server/model default. */
+    /** Provider context capacity where supported; Ollama maps this to num_ctx. */
     contextWindow?: number
+    /** Provider-specific defaults. Adapters interpret these without llm-utils inventing a universal taxonomy. */
+    providerOptions?: Record<string, unknown>
 }
 
 export interface ModelInfo {
@@ -91,6 +93,8 @@ export interface GenerateOptions {
     format?: ResponseFormat
     temperature?: number
     maxTokens?: number
+    contextWindow?: number
+    providerOptions?: Record<string, unknown>
     signal?: AbortSignal
     timeoutMs?: number
 }
@@ -112,6 +116,8 @@ export interface AskOptions<T = unknown> {
     system?: string
     temperature?: number
     maxTokens?: number
+    contextWindow?: number
+    providerOptions?: Record<string, unknown>
     preferLocal?: boolean
     signal?: AbortSignal
     timeoutMs?: number
