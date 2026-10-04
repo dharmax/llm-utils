@@ -174,7 +174,7 @@ export class JevSystemOne implements SystemOne {
       recordSystemOneMetric(
         options,
         this.options.id ?? 'jev',
-        this.options.quality ?? 'high',
+        this.options.quality ?? 'low',
         questions,
         performance.now() - started,
         false,
@@ -194,21 +194,21 @@ export class JevSystemOne implements SystemOne {
         this.options.timeoutMs ? {timeout: this.options.timeoutMs} : undefined,
       )
       if (!result?.answers || typeof result.answers !== 'object') {
-        recordSystemOneMetric(options, this.options.id ?? 'jev', this.options.quality ?? 'high', questions, performance.now() - started, false, true, 'Malformed Jev response')
+        recordSystemOneMetric(options, this.options.id ?? 'jev', this.options.quality ?? 'low', questions, performance.now() - started, false, true, 'Malformed Jev response')
         return null
       }
 
       const assessment = {
         answers: result.answers,
         backendId: this.options.id ?? 'jev',
-        quality: this.options.quality ?? 'high',
+        quality: this.options.quality ?? 'low',
         latencyMs: performance.now() - started,
         ...(result.usage ? {usage: result.usage} : {}),
       } satisfies SystemOneAssessment
       recordSystemOneMetric(options, assessment.backendId, assessment.quality, questions, assessment.latencyMs, true, true)
       return assessment
     } catch (error) {
-      recordSystemOneMetric(options, this.options.id ?? 'jev', this.options.quality ?? 'high', questions, performance.now() - started, false, true, error instanceof Error ? error.message : String(error))
+      recordSystemOneMetric(options, this.options.id ?? 'jev', this.options.quality ?? 'low', questions, performance.now() - started, false, true, error instanceof Error ? error.message : String(error))
       return null
     }
   }
