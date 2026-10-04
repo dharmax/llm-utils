@@ -90,6 +90,40 @@ describe('correlated performance metrics', () => {
         expect(actorEvent!.metadata?.totalTokens).toBeUndefined()
     })
 
+    it('records structured provider termination provenance without parsing error text', async () => {
+        const sink = new InMemoryMetricsStore()
+        let call = 0
+        const completion = new CompletionEngine([]).registerAdapter({
+            id: 'mock-term',
+            async generate(options) {
+                call += 1
+                if (call === 1) return {
+                    ok: true,
+                    text: 'partial',
+                    finishReason: 'length',
+                    model: {providerId: 'mock-term', modelId: options.modelId},
+                }
+                return {
+                    ok: false,
+                    text: '',
+                    model: {providerId: 'mock-term', modelId: options.modelId},
+                    failure: {kind: 'quota' as const, message: 'credits exhausted', retryable: false, fatal: true},
+                }
+            },
+        })
+        const asker = new Asker({
+            providers: {'mock-term': {id: 'mock-term', available: true}},
+            completion,
+            defaultModel: 'mock-term/model',
+        })
+
+        await asker.ask('first', {metrics: {traceId: 'trace-term'}, metricsSink: sink})
+        await asker.ask('second', {metrics: {traceId: 'trace-term'}, metricsSink: sink})
+        const events = sink.query({kind: 'llm', traceId: 'trace-term', order: 'asc'})
+        expect(events[0]?.kind === 'llm' && events[0].finishReason).toBe('length')
+        expect(events[1]?.kind === 'llm' && events[1].failureKind).toBe('quota')
+    })
+
     it('records System-1 fallback attempts under one trace without logging inputs', async () => {
         const sink = new InMemoryMetricsStore()
         const questions: Record<string, SystemOneQuestion> = {
