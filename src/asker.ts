@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto'
 import type {ZodType} from 'zod'
 import {CompletionEngine} from './completion.ts'
 import {type ContextRequest, type ContextResolver, resolveContext} from './context.ts'
@@ -16,6 +17,15 @@ import type {
     ProviderConfig,
     ProviderId,
 } from './types.ts'
+
+function providerOptionsEvidence(config: ProviderConfig, callOptions?: Record<string, unknown>): {keys: string[]; hash?: string} {
+    const merged = {...(config.providerOptions ?? {}), ...(callOptions ?? {})}
+    const keys = Object.keys(merged).sort()
+    if (!keys.length)
+        return {keys}
+    const canonical = JSON.stringify(Object.fromEntries(keys.map(key => [key, merged[key]])))
+    return {keys, hash: createHash('sha256').update(canonical).digest('hex')}
+}
 
 export interface AskerOptions {
     providers?: Record<string, ProviderConfig> | ProviderConfig[]
@@ -156,6 +166,7 @@ export class Asker {
             const started = performance.now()
             const parentMetrics = options.metrics
             const callMetrics = parentMetrics ? childMetricsContext(parentMetrics) : undefined
+            const providerEvidence = providerOptionsEvidence(config, options.providerOptions)
             const res = await this.circuit.execute(target, () => this.completion.generate(
                 callPrompt,
                 target,
@@ -193,7 +204,9 @@ export class Asker {
                 attempt,
                 metadata: {
                     ...(options.maxTokens !== undefined ? {maxTokens: options.maxTokens} : {}),
+                    ...(options.temperature !== undefined ? {temperature: options.temperature} : {}),
                     ...((options.contextWindow ?? config.contextWindow) !== undefined ? {contextWindow: options.contextWindow ?? config.contextWindow} : {}),
+                    ...(providerEvidence.keys.length ? {providerOptionKeys: providerEvidence.keys, providerOptionsHash: providerEvidence.hash} : {}),
                 },
             })
             return res
