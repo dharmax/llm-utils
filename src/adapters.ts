@@ -58,7 +58,7 @@ export class OpenAIAdapter implements ProviderAdapter {
                 ],
                 store: false,
                 max_output_tokens: maxTokens ?? 4096,
-                ...(supportsOpenAiTemperature(modelId) ? {temperature: temperature ?? 0.1} : {}),
+                ...(temperature !== undefined ? {temperature} : {}),
                 ...(textFormat ? {text: {format: textFormat}} : {}),
             },
             signal,
@@ -466,10 +466,6 @@ function hasDisallowedOpenAiSchema(schema: unknown): boolean {
         if (!props.every(p => req.includes(p))) return true
     }
     return Object.values(obj).some(val => typeof val === 'object' && val !== null && hasDisallowedOpenAiSchema(val))
-}
-
-function supportsOpenAiTemperature(modelId: string): boolean {
-    return !/^(?:gpt-(?:5|6)(?:[.-]|$)|o[1-9](?:[.-]|$))/i.test(modelId)
 }
 
 function openAiResponseText(data: {
