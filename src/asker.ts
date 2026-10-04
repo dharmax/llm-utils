@@ -164,6 +164,8 @@ export class Asker {
                     system: options.system,
                     temperature: options.temperature,
                     maxTokens: options.maxTokens,
+                    contextWindow: options.contextWindow,
+                    providerOptions: options.providerOptions,
                     format,
                     signal: options.signal,
                     timeoutMs: options.timeoutMs,
@@ -191,7 +193,7 @@ export class Asker {
                 attempt,
                 metadata: {
                     ...(options.maxTokens !== undefined ? {maxTokens: options.maxTokens} : {}),
-                    ...(config.contextWindow !== undefined ? {contextWindow: config.contextWindow} : {}),
+                    ...((options.contextWindow ?? config.contextWindow) !== undefined ? {contextWindow: options.contextWindow ?? config.contextWindow} : {}),
                 },
             })
             return res
