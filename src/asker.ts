@@ -189,6 +189,10 @@ export class Asker {
                 parentSpanId: callMetrics?.parentSpanId,
                 tags: callMetrics?.tags,
                 attempt,
+                metadata: {
+                    ...(options.maxTokens !== undefined ? {maxTokens: options.maxTokens} : {}),
+                    ...(config.contextWindow !== undefined ? {contextWindow: config.contextWindow} : {}),
+                },
             })
             return res
         }
