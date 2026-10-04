@@ -2,11 +2,19 @@ import {childMetricsContext, emitMetric, type MetricsContext, type MetricsSink} 
 
 export type SystemOneQuality = 'low' | 'medium' | 'high'
 
+export type SystemOneJsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | { readonly [key: string]: SystemOneJsonValue }
+  | readonly SystemOneJsonValue[]
+
 /** System-One entry values accepted by Jev-compatible backends. */
 export type SystemOneEntry =
   | string
-  | Readonly<Record<string, unknown>>
-  | readonly unknown[]
+  | { readonly [key: string]: SystemOneJsonValue }
+  | readonly SystemOneJsonValue[]
   | null
 
 export type SystemOneState = SystemOneEntry
