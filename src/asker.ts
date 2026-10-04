@@ -181,6 +181,8 @@ export class Asker {
                 latencyMs: performance.now() - started,
                 success: res.ok,
                 error: res.failure?.message,
+                failureKind: res.failure?.kind,
+                finishReason: res.finishReason,
                 taskClass: callMetrics?.taskClass ?? options.task,
                 traceId: callMetrics?.traceId,
                 spanId: callMetrics?.spanId,
