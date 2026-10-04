@@ -2,19 +2,23 @@ import {childMetricsContext, emitMetric, type MetricsContext, type MetricsSink} 
 
 export type SystemOneQuality = 'low' | 'medium' | 'high'
 
-export type SystemOneJsonValue =
+export type SystemOneValue =
   | string
   | number
   | boolean
   | null
-  | { readonly [key: string]: SystemOneJsonValue }
-  | readonly SystemOneJsonValue[]
+  | undefined
+  | { readonly [key: string]: SystemOneValue }
+  | readonly SystemOneValue[]
 
-/** System-One entry values accepted by Jev-compatible backends. */
+/**
+ * System-One state/instruction values accepted by JS backends.
+ * Undefined object properties are valid input and are naturally omitted by JSON transports.
+ */
 export type SystemOneEntry =
   | string
-  | { readonly [key: string]: SystemOneJsonValue }
-  | readonly SystemOneJsonValue[]
+  | { readonly [key: string]: SystemOneValue }
+  | readonly SystemOneValue[]
   | null
 
 export type SystemOneState = SystemOneEntry
