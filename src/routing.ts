@@ -33,7 +33,12 @@ export class ModelRouter {
         this.routes = {...DEFAULT_TASK_ROUTES, ...options.routes}
         this.customRouter = options.router
         this.preferLocal = Boolean(options.preferLocal)
-        this.defaultModel = parseModelTarget(options.defaultModel ?? 'google/gemini-2.0-flash')
+        this.defaultModel = parseModelTarget(
+            options.defaultModel
+            ?? options.routes?.default
+            ?? DEFAULT_TASK_ROUTES.default
+            ?? 'google/gemini-2.0-flash',
+        )
     }
 
     /**
@@ -62,18 +67,7 @@ export class ModelRouter {
                 return typeof custom === 'string' ? parseModelTarget(custom) : custom
         }
 
-        // 3. Local preference explicitly requested
-        if (useLocal && availableProviders.includes('ollama')) {
-            if (targetStr && this.routes[targetStr] && String(this.routes[targetStr]).startsWith('ollama/'))
-                return parseModelTarget(this.routes[targetStr]!)
-            if (targetStr && (targetStr.startsWith('ollama/') || inferProviderFromModelName(targetStr) === 'ollama'))
-                return parseModelTarget(targetStr)
-            if (this.defaultModel.providerId === 'ollama')
-                return this.defaultModel
-            return parseModelTarget(this.routes.local ?? 'ollama/llama3.2')
-        }
-
-        // 4. Mapped task (e.g. 'code', 'fast', 'local')
+        // 3. Explicit task routes outrank preferences.
         if (targetStr && this.routes[targetStr]) {
             const mapped = this.routes[targetStr]
             const parsed = typeof mapped === 'string' ? parseModelTarget(mapped) : mapped
@@ -81,11 +75,18 @@ export class ModelRouter {
                 return parsed
         }
 
-        // 5. Bare model name inference (e.g. 'gpt-4o', 'qwen2.5-coder', 'llama3.2', 'deepseek-r1')
+        // 4. A bare model name is still an explicit model choice.
         if (targetStr) {
             const inferred = inferProviderFromModelName(targetStr)
             if (inferred)
                 return {providerId: inferred, modelId: targetStr}
+        }
+
+        // 5. Local preference applies only when no explicit model/task route resolved.
+        if (useLocal && availableProviders.includes('ollama')) {
+            if (this.defaultModel.providerId === 'ollama')
+                return this.defaultModel
+            return parseModelTarget(this.routes.local ?? 'ollama/llama3.2')
         }
 
         return this.resolveDefault(availableProviders, useLocal)
@@ -98,16 +99,8 @@ export class ModelRouter {
             return parseModelTarget(this.routes.local ?? 'ollama/llama3.2')
         }
 
-        // Check routes['default']
-        const defaultRoute = this.routes.default
-        if (defaultRoute) {
-            const parsed = typeof defaultRoute === 'string' ? parseModelTarget(defaultRoute) : defaultRoute
-            if (availableProviders.length === 0 || availableProviders.includes(parsed.providerId))
-                return parsed
-        }
-
-        // If the configured default provider is available, use it
-        if (availableProviders.includes(this.defaultModel.providerId))
+        // The configured default model is authoritative when its provider is available.
+        if (availableProviders.length === 0 || availableProviders.includes(this.defaultModel.providerId))
             return this.defaultModel
 
         // Fallback to first available provider
