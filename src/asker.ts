@@ -167,15 +167,18 @@ export class Asker {
             const parentMetrics = options.metrics
             const callMetrics = parentMetrics ? childMetricsContext(parentMetrics) : undefined
             const providerEvidence = providerOptionsEvidence(config, options.providerOptions)
+            const maxTokens = options.maxTokens ?? config.maxTokens
+            const temperature = options.temperature ?? config.temperature
+            const contextWindow = options.contextWindow ?? config.contextWindow
             const res = await this.circuit.execute(target, () => this.completion.generate(
                 callPrompt,
                 target,
                 config,
                 {
                     system: options.system,
-                    temperature: options.temperature,
-                    maxTokens: options.maxTokens,
-                    contextWindow: options.contextWindow,
+                    temperature,
+                    maxTokens,
+                    contextWindow,
                     providerOptions: options.providerOptions,
                     format,
                     signal: options.signal,
@@ -203,9 +206,9 @@ export class Asker {
                 tags: callMetrics?.tags,
                 attempt,
                 metadata: {
-                    ...(options.maxTokens !== undefined ? {maxTokens: options.maxTokens} : {}),
-                    ...(options.temperature !== undefined ? {temperature: options.temperature} : {}),
-                    ...((options.contextWindow ?? config.contextWindow) !== undefined ? {contextWindow: options.contextWindow ?? config.contextWindow} : {}),
+                    ...(maxTokens !== undefined ? {maxTokens} : {}),
+                    ...(temperature !== undefined ? {temperature} : {}),
+                    ...(contextWindow !== undefined ? {contextWindow} : {}),
                     ...(providerEvidence.keys.length ? {providerOptionKeys: providerEvidence.keys, providerOptionsHash: providerEvidence.hash} : {}),
                 },
             })
