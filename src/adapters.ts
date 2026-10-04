@@ -165,7 +165,7 @@ export class OllamaProvider implements ProviderAdapter {
     readonly id = 'ollama'
 
     async generate(options: GenerateOptions): Promise<GenerationResult> {
-        const {modelId, prompt, system, config, format, signal, timeoutMs, temperature} = options
+        const {modelId, prompt, system, config, format, signal, timeoutMs, temperature, maxTokens} = options
         const host = config.host ?? config.baseUrl ?? 'http://127.0.0.1:11434'
         const baseUrl = (host.startsWith('http') ? host : `http://${host}`).replace(/\/+$/, '')
 
@@ -185,7 +185,7 @@ export class OllamaProvider implements ProviderAdapter {
                 ],
                 stream: false,
                 ...(schema ? {format: schema} : isJson ? {format: 'json'} : {}),
-                options: {temperature: temperature ?? 0.1, num_predict: 2048},
+                options: {temperature: temperature ?? 0.1, num_predict: maxTokens ?? 2048, ...(config.contextWindow !== undefined ? {num_ctx: config.contextWindow} : {})},
             }
             : {
                 model: modelId,
@@ -193,7 +193,7 @@ export class OllamaProvider implements ProviderAdapter {
                 system,
                 stream: false,
                 ...(schema ? {format: schema} : isJson ? {format: 'json'} : {}),
-                options: {temperature: temperature ?? 0.1, num_predict: 2048},
+                options: {temperature: temperature ?? 0.1, num_predict: maxTokens ?? 2048, ...(config.contextWindow !== undefined ? {num_ctx: config.contextWindow} : {})},
             }
 
         return postJson({

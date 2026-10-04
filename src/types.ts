@@ -69,6 +69,8 @@ export interface ProviderConfig {
     available?: boolean
     models?: ModelInfo[]
     local?: boolean
+    /** Ollama context capacity in tokens; omitted preserves the server/model default. */
+    contextWindow?: number
 }
 
 export interface ModelInfo {

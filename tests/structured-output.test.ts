@@ -171,3 +171,22 @@ test('Asker.ask performs bounded corrective retry when validation fails', async 
     expect(result.data).toEqual({count: 42})
     expect(callCount).toBe(2)
 })
+
+test('Asker.json carries Ollama context capacity and output budget through schema correction', async () => {
+    const originalFetch = globalThis.fetch
+    const requests: Array<{options: {num_ctx?: number; num_predict: number}; messages: Array<{content: string}>}> = []
+    globalThis.fetch = (async (_url, init) => {
+        requests.push(JSON.parse(String(init?.body)))
+        return new Response(JSON.stringify({message: {content: requests.length === 1 ? '{"count":"invalid"}' : '{"count":42}'}}))
+    }) as typeof fetch
+    try {
+        const asker = new Asker({providers: {ollama: {id: 'ollama', host: 'http://fixture', contextWindow: 32768}}, defaultModel: 'ollama/fixture'})
+        const result = await asker.json('Return a count', z.object({count: z.number()}), {maxRetries: 1, maxTokens: 512})
+        expect(result.ok).toBe(true)
+        expect(requests).toHaveLength(2)
+        for (const request of requests) expect(request.options).toMatchObject({num_ctx: 32768, num_predict: 512})
+        expect(requests[1]!.messages[0]!.content).toContain('Previous response failed validation:')
+        await new OllamaProvider().generate({modelId: 'fixture', prompt: 'Default options', config: {id: 'ollama', host: 'http://fixture'}})
+        expect(requests[2]!.options).toEqual({temperature: 0.1, num_predict: 2048})
+    } finally { globalThis.fetch = originalFetch }
+})
