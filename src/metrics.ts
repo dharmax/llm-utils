@@ -32,6 +32,8 @@ export interface LlmMetricEvent extends MetricBase {
     totalTokens: number
     costUsd?: number
     attempt?: number
+    failureKind?: string
+    finishReason?: string
 }
 
 export interface SystemOneMetricEvent extends MetricBase {
@@ -302,6 +304,8 @@ export class MetricsEngine {
             latencyMs,
             success: result.ok,
             error: result.failure?.message,
+            failureKind: result.failure?.kind,
+            finishReason: result.finishReason,
             costUsd: calculateUsageCost(result.usage, pricing),
         })
     }
