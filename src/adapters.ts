@@ -51,11 +51,12 @@ export class OpenAIAdapter implements ProviderAdapter {
             signal,
             timeoutMs,
             extract: data => {
-                const choice = (data as {choices?: Array<{message?: {content?: string}}>})?.choices?.[0]
+                const choice = (data as {choices?: Array<{message?: {content?: string}; finish_reason?: string}>})?.choices?.[0]
                 const usageData = (data as {usage?: {prompt_tokens?: number; completion_tokens?: number; total_tokens?: number}})?.usage
                 return {
                     text: choice?.message?.content ?? '',
                     usage: usageData ? toUsage(usageData.prompt_tokens, usageData.completion_tokens, usageData.total_tokens) : undefined,
+                    finishReason: choice?.finish_reason,
                 }
             },
         })
@@ -66,7 +67,7 @@ export class AnthropicAdapter implements ProviderAdapter {
     readonly id = 'anthropic'
 
     async generate(options: GenerateOptions): Promise<GenerationResult> {
-        const {modelId, prompt, system, config, format, signal, timeoutMs, temperature} = options
+        const {modelId, prompt, system, config, format, signal, timeoutMs, temperature, maxTokens} = options
         if (!config.apiKey)
             return missingApiKey(this.id, modelId)
 
@@ -96,13 +97,14 @@ export class AnthropicAdapter implements ProviderAdapter {
                 model: modelId,
                 messages: [{role: 'user', content: prompt}],
                 system: effectiveSystem || undefined,
-                max_tokens: 4096,
+                max_tokens: maxTokens ?? 4096,
                 temperature: temperature ?? 0.1,
             },
             signal,
             timeoutMs,
             extract: data => {
                 const content = (data as {content?: Array<{type: string; text?: string}>})?.content ?? []
+                const finishReason = (data as {stop_reason?: string})?.stop_reason
                 const text = content
                     .filter(c => c.type === 'text')
                     .map(c => c.text ?? '')
@@ -113,6 +115,7 @@ export class AnthropicAdapter implements ProviderAdapter {
                 return {
                     text,
                     usage: usageData ? toUsage(promptTokens, completionTokens, promptTokens + completionTokens) : undefined,
+                    finishReason,
                 }
             },
         })
@@ -123,7 +126,7 @@ export class GoogleAdapter implements ProviderAdapter {
     readonly id = 'google'
 
     async generate(options: GenerateOptions): Promise<GenerationResult> {
-        const {modelId, prompt, system, config, format, signal, timeoutMs, temperature} = options
+        const {modelId, prompt, system, config, format, signal, timeoutMs, temperature, maxTokens} = options
         if (!config.apiKey)
             return missingApiKey(this.id, modelId)
 
@@ -141,6 +144,7 @@ export class GoogleAdapter implements ProviderAdapter {
                 contents: [{role: 'user', parts: [{text: prompt}]}],
                 generationConfig: {
                     temperature: temperature ?? 0.1,
+                    maxOutputTokens: maxTokens ?? 4096,
                     ...(isJson ? {responseMimeType: 'application/json'} : {}),
                     ...(schema ? {responseJsonSchema: schema} : {}),
                 },
@@ -149,12 +153,13 @@ export class GoogleAdapter implements ProviderAdapter {
             signal,
             timeoutMs,
             extract: data => {
-                const cand = (data as {candidates?: Array<{content?: {parts?: Array<{text?: string}>}}>})?.candidates?.[0]
+                const cand = (data as {candidates?: Array<{content?: {parts?: Array<{text?: string}>}; finishReason?: string}>})?.candidates?.[0]
                 const text = cand?.content?.parts?.[0]?.text ?? ''
                 const meta = (data as {usageMetadata?: {promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number}})?.usageMetadata
                 return {
                     text,
                     usage: meta ? toUsage(meta.promptTokenCount, meta.candidatesTokenCount, meta.totalTokenCount) : undefined,
+                    finishReason: cand?.finishReason,
                 }
             },
         })
@@ -208,9 +213,11 @@ export class OllamaProvider implements ProviderAdapter {
                 const text = msg?.content ?? (data as {response?: string})?.response ?? ''
                 const promptTokens = (data as {prompt_eval_count?: number})?.prompt_eval_count ?? 0
                 const completionTokens = (data as {eval_count?: number})?.eval_count ?? 0
+                const finishReason = (data as {done_reason?: string})?.done_reason
                 return {
                     text,
                     usage: toUsage(promptTokens, completionTokens, promptTokens + completionTokens),
+                    finishReason,
                 }
             },
         })
@@ -225,7 +232,7 @@ interface PostJsonOptions {
     body: Record<string, unknown>
     signal?: AbortSignal
     timeoutMs?: number
-    extract: (data: unknown) => {text: string; usage?: Usage}
+    extract: (data: unknown) => {text: string; usage?: Usage; finishReason?: string}
 }
 
 async function postJson(opts: PostJsonOptions): Promise<GenerationResult> {
@@ -279,6 +286,7 @@ async function postJson(opts: PostJsonOptions): Promise<GenerationResult> {
             ok: true,
             text: extracted.text,
             usage: extracted.usage,
+            finishReason: extracted.finishReason,
             model: {providerId, modelId},
             raw: parsed,
         }
