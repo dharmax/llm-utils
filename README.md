@@ -137,6 +137,8 @@ const asker = new Asker({
       id: 'ollama',
       host: 'http://127.0.0.1:11434',
       contextWindow: 32768,
+      maxTokens: 4096,
+      temperature: 0.2,
       providerOptions: {
         top_k: 40,
         top_p: 0.9,
@@ -149,7 +151,7 @@ const asker = new Asker({
 
 For Ollama, `providerOptions` are sent inside the native `options` object. The same escape hatch is passed at the natural request level by the other built-in adapters.
 
-Typed controls have precedence over raw provider values: `contextWindow` controls Ollama `num_ctx`, `maxTokens` controls `num_predict`, and `temperature` controls `temperature`.
+`contextWindow`, `maxTokens`, and `temperature` may be provider defaults or per-call overrides; per-call values win. Typed controls also win over conflicting raw provider values: `contextWindow` controls Ollama `num_ctx`, `maxTokens` controls `num_predict`, and `temperature` controls `temperature`.
 
 Do not put credentials or prompt/source content in `providerOptions`; it is intended only for model/runtime parameters.
 
@@ -690,3 +692,8 @@ bun run build      # Bundles neutral ESM and emits .d.ts declarations
 ## License
 
 MIT © [dharmax](https://github.com/dharmax)
+
+
+### Jev / TypeSafe System One
+
+`JevSystemOne` implements the same `SystemOne` contract as Laya and remote backends. The official `@typesafe-ai/sdk` is an optional peer dependency and is loaded only when Jev is used. Configure it through `TYPESAFE_API_KEY` or explicit constructor options; it composes normally with `FallbackSystemOne`.
