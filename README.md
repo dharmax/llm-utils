@@ -696,4 +696,4 @@ MIT © [dharmax](https://github.com/dharmax)
 
 ### Jev / TypeSafe System One
 
-`JevSystemOne` implements the same `SystemOne` contract as Laya and remote backends. The official `@typesafe-ai/sdk` is an optional peer dependency and is loaded only when Jev is used. Configure it through `TYPESAFE_API_KEY` or explicit constructor options; it composes normally with `FallbackSystemOne`.
+`JevSystemOne` implements the same `SystemOne` contract as Laya and remote backends. The official `@typesafe-ai/sdk` is an optional runtime package and is loaded only when Jev is used. Configure it through `TYPESAFE_API_KEY` or explicit constructor options; it composes normally with `FallbackSystemOne`.
