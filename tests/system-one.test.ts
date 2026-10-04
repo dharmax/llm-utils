@@ -1,6 +1,7 @@
 import {describe, expect, it} from 'bun:test'
 import {
   FallbackSystemOne,
+  JevSystemOne,
   LayaSystemOne,
   RemoteSystemOne,
   type SystemOneQuestion,
@@ -48,6 +49,46 @@ describe('SystemOne', () => {
     expect(result?.usage).toEqual({tokens: 17})
     expect(result?.backendId).toBe('test-laya')
     expect(result?.quality).toBe('medium')
+  })
+
+  it('maps Jev through the shared SystemOne contract', async () => {
+    let request: any
+    let callOptions: any
+    const systemOne = new JevSystemOne({
+      id: 'test-jev',
+      model: 'jev-latest',
+      timeoutMs: 1200,
+      load: async () => ({
+        async systemOne(receivedRequest, receivedOptions) {
+          request = receivedRequest
+          callOptions = receivedOptions
+          return {
+            answers: {
+              route: {type: 'choice', choice: 'deep', confidence: 0.9, probabilities: {fast: 0.1, deep: 0.9}},
+              safe: {type: 'noul', noul: 0.98},
+            },
+            usage: {input_tokens: 11, output_tokens: 3},
+          }
+        },
+      }),
+    })
+
+    const result = await systemOne.assess({input: 'hello'}, questions)
+    expect(request).toEqual({state: {input: 'hello'}, questions, model: 'jev-latest'})
+    expect(callOptions).toEqual({timeout: 1200})
+    expect(result?.answers.route?.choice).toBe('deep')
+    expect(result?.answers.route?.probabilities?.deep).toBe(0.9)
+    expect(result?.answers.safe?.noul).toBe(0.98)
+    expect(result?.usage).toEqual({input_tokens: 11, output_tokens: 3})
+    expect(result?.backendId).toBe('test-jev')
+    expect(result?.quality).toBe('high')
+  })
+
+  it('returns null when Jev is unavailable or malformed', async () => {
+    expect(await new JevSystemOne({load: async () => null}).assess({}, questions)).toBeNull()
+    expect(await new JevSystemOne({
+      load: async () => ({async systemOne() { return {} }}),
+    }).assess({}, questions)).toBeNull()
   })
 
   it('returns null when Laya is unavailable or malformed', async () => {
