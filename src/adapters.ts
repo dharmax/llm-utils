@@ -15,10 +15,74 @@ export class OpenAIAdapter implements ProviderAdapter {
     }
 
     async generate(options: GenerateOptions): Promise<GenerationResult> {
-        const {modelId, prompt, system, config, format, signal, timeoutMs, temperature, maxTokens, providerOptions} = options
+        const {config, modelId} = options
         if (!config.apiKey && !config.baseUrl)
             return missingApiKey(this.id, modelId)
 
+        return this.useResponsesApi(config)
+            ? this.generateResponse(options)
+            : this.generateChatCompletion(options)
+    }
+
+    private useResponsesApi(config: GenerateOptions['config']): boolean {
+        if (this.id !== 'openai') return false
+        if (!config.baseUrl) return true
+        return /^https:\/\/api\.openai\.com(?:\/|$)/i.test(config.baseUrl)
+    }
+
+    private async generateResponse(options: GenerateOptions): Promise<GenerationResult> {
+        const {modelId, prompt, system, config, format, signal, timeoutMs, temperature, maxTokens, providerOptions} = options
+        const baseUrl = (config.baseUrl ?? 'https://api.openai.com/v1').replace(/\/+$/, '')
+        const {textFormat, fallbackSchema} = toOpenAiResponsesFormat(format)
+        const effectivePrompt = fallbackSchema
+            ? `${prompt}\n\nYou MUST respond with valid JSON adhering to this JSON Schema:\n${JSON.stringify(fallbackSchema, null, 2)}`
+            : prompt
+        const headers: Record<string, string> = {}
+        if (config.apiKey) headers.Authorization = `Bearer ${config.apiKey}`
+
+        return postJson({
+            providerId: this.id,
+            modelId,
+            url: `${baseUrl}/responses`,
+            headers,
+            body: {
+                ...(config.providerOptions ?? {}),
+                ...(providerOptions ?? {}),
+                model: modelId,
+                input: [
+                    ...(system ? [{role: 'system', content: system}] : []),
+                    {role: 'user', content: effectivePrompt},
+                ],
+                store: false,
+                max_output_tokens: maxTokens ?? 4096,
+                ...(supportsOpenAiTemperature(modelId) ? {temperature: temperature ?? 0.1} : {}),
+                ...(textFormat ? {text: {format: textFormat}} : {}),
+            },
+            signal,
+            timeoutMs,
+            extract: data => {
+                const response = data as {
+                    output_text?: string
+                    output?: Array<{content?: Array<{type?: string; text?: string}>}>
+                    status?: string
+                    incomplete_details?: {reason?: string}
+                    usage?: {input_tokens?: number; output_tokens?: number; total_tokens?: number}
+                }
+                return {
+                    text: openAiResponseText(response),
+                    usage: response.usage
+                        ? toUsage(response.usage.input_tokens, response.usage.output_tokens, response.usage.total_tokens)
+                        : undefined,
+                    finishReason: response.status === 'incomplete'
+                        ? response.incomplete_details?.reason ?? 'incomplete'
+                        : response.status,
+                }
+            },
+        })
+    }
+
+    private async generateChatCompletion(options: GenerateOptions): Promise<GenerationResult> {
+        const {modelId, prompt, system, config, format, signal, timeoutMs, temperature, maxTokens, providerOptions} = options
         const baseUrl = (config.baseUrl ?? 'https://api.openai.com/v1').replace(/\/+$/, '')
         const {responseFormat, fallbackSchema} = toOpenAiFormat(format)
         let effectivePrompt = prompt
@@ -399,6 +463,48 @@ function hasDisallowedOpenAiSchema(schema: unknown): boolean {
         if (!props.every(p => req.includes(p))) return true
     }
     return Object.values(obj).some(val => typeof val === 'object' && val !== null && hasDisallowedOpenAiSchema(val))
+}
+
+function supportsOpenAiTemperature(modelId: string): boolean {
+    return !/^(?:gpt-(?:5|6)(?:[.-]|$)|o[1-9](?:[.-]|$))/i.test(modelId)
+}
+
+function openAiResponseText(data: {
+    output_text?: string
+    output?: Array<{content?: Array<{type?: string; text?: string}>}>
+}): string {
+    if (data.output_text) return data.output_text
+    return (data.output ?? [])
+        .flatMap(item => item.content ?? [])
+        .filter(item => item.type === 'output_text')
+        .map(item => item.text ?? '')
+        .filter(Boolean)
+        .join('\n')
+}
+
+function toOpenAiResponsesFormat(format?: ResponseFormat): {
+    textFormat?: Record<string, unknown>
+    fallbackSchema?: Record<string, unknown>
+} {
+    if (!format || format === 'text' || (typeof format === 'object' && format.type === 'text' && !format.schema))
+        return {}
+    if (format === 'json' || (typeof format === 'object' && format.type === 'json' && !format.schema))
+        return {textFormat: {type: 'json_object'}}
+    if (typeof format === 'object' && (format.type === 'json_schema' || format.schema)) {
+        const schema = (format.schema ?? {}) as Record<string, unknown>
+        const strict = format.strict ?? false
+        if (schema.type !== 'object' || (strict && hasDisallowedOpenAiSchema(schema)))
+            return {textFormat: {type: 'json_object'}, fallbackSchema: schema}
+        return {
+            textFormat: {
+                type: 'json_schema',
+                name: format.name ?? 'structured_response',
+                schema,
+                ...(strict ? {strict: true} : {}),
+            },
+        }
+    }
+    return {}
 }
 
 function toOpenAiFormat(format?: ResponseFormat): { responseFormat?: Record<string, unknown>; fallbackSchema?: Record<string, unknown> } {
