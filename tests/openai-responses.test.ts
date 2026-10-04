@@ -44,7 +44,6 @@ describe('OpenAIAdapter Responses routing', () => {
         },
         strict: true,
       },
-      temperature: 0.2,
       maxTokens: 777,
       providerOptions: {metadata: {source: 'test'}},
     })
