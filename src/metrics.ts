@@ -197,7 +197,7 @@ export class LlmMetrics {
             totalTokens,
             latencyMs: Math.max(0, Number(event.latencyMs ?? 0)),
             success: Boolean(event.success),
-            costUsd: Number.isFinite(event.costUsd) ? Number(event.costUsd) : 0,
+            ...(Number.isFinite(event.costUsd) ? {costUsd: Number(event.costUsd)} : {}),
             ...(event.tags ? {tags: {...event.tags}} : {}),
             ...(event.metadata ? {metadata: {...event.metadata}} : {}),
         }
@@ -306,7 +306,7 @@ export class MetricsEngine {
             error: result.failure?.message,
             failureKind: result.failure?.kind,
             finishReason: result.finishReason,
-            costUsd: calculateUsageCost(result.usage, pricing),
+            ...(pricing ? {costUsd: calculateUsageCost(result.usage, pricing)} : {}),
         })
     }
 
