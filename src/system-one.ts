@@ -170,6 +170,7 @@ interface JevLike {
     options?: {timeout?: number},
   ): Promise<{
     answers?: Record<string, SystemOneAnswer>
+    model?: string
     usage?: Record<string, unknown>
   }>
 }
