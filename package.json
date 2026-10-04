@@ -59,13 +59,17 @@
   },
   "peerDependencies": {
     "@dharmax/shell-proc-utils": ">=0.1.0",
-    "@receptron/laya": "^0.1.2"
+    "@receptron/laya": "^0.1.2",
+    "@typesafe-ai/sdk": "^0.6.0"
   },
   "peerDependenciesMeta": {
     "@dharmax/shell-proc-utils": {
       "optional": true
     },
     "@receptron/laya": {
+      "optional": true
+    },
+    "@typesafe-ai/sdk": {
       "optional": true
     }
   },
