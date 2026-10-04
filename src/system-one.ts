@@ -2,27 +2,44 @@ import {childMetricsContext, emitMetric, type MetricsContext, type MetricsSink} 
 
 export type SystemOneQuality = 'low' | 'medium' | 'high'
 
+/** System-One entry values accepted by Jev-compatible backends. */
+export type SystemOneEntry =
+  | string
+  | Readonly<Record<string, unknown>>
+  | readonly unknown[]
+  | null
+
+export type SystemOneState = SystemOneEntry
+
 export type SystemOneQuestion =
   | {
       type: 'choice'
-      instructions: string
-      criteria: Readonly<Record<string, string>>
+      instructions?: SystemOneEntry
+      criteria: Readonly<Record<string, SystemOneEntry>>
     }
   | {
       type: 'noul'
-      instructions: string
+      instructions?: SystemOneEntry
+      criteria?: {
+        true?: SystemOneEntry
+        false?: SystemOneEntry
+      } | null
     }
   | {
       type: 'score'
-      instructions: string
-      criteria: readonly string[]
+      instructions?: SystemOneEntry
+      /** Ordered rubric. Jev requires 2-10 levels; adapters may impose tighter limits. */
+      criteria: readonly SystemOneEntry[]
     }
 
 export interface SystemOneAnswer {
+  readonly type?: 'choice' | 'score' | 'noul'
   readonly choice?: string
   readonly noul?: number
   readonly score?: number
+  readonly confidence?: number
   readonly probabilities?: Readonly<Record<string, number>>
+  readonly legend?: Readonly<Record<string, SystemOneEntry>>
   readonly [key: string]: unknown
 }
 
@@ -31,6 +48,7 @@ export interface SystemOneAssessment {
   readonly backendId: string
   readonly quality: SystemOneQuality
   readonly latencyMs: number
+  readonly model?: string
   readonly usage?: Readonly<Record<string, unknown>>
 }
 
@@ -41,7 +59,7 @@ export interface SystemOneAssessOptions {
 
 export interface SystemOne {
   assess(
-    state: Readonly<Record<string, unknown>>,
+    state: SystemOneState,
     questions: Readonly<Record<string, SystemOneQuestion>>,
     options?: SystemOneAssessOptions,
   ): Promise<SystemOneAssessment | null>
@@ -59,7 +77,7 @@ export class RemoteSystemOne implements SystemOne {
   constructor(private readonly options: RemoteSystemOneOptions) {}
 
   async assess(
-    state: Readonly<Record<string, unknown>>,
+    state: SystemOneState,
     questions: Readonly<Record<string, SystemOneQuestion>>,
     options: SystemOneAssessOptions = {},
   ): Promise<SystemOneAssessment | null> {
@@ -84,6 +102,7 @@ export class RemoteSystemOne implements SystemOne {
 
       const body = await response.json() as {
         answers?: Record<string, SystemOneAnswer>
+        model?: string
         usage?: Record<string, unknown>
         ok?: boolean
       }
@@ -97,6 +116,7 @@ export class RemoteSystemOne implements SystemOne {
         backendId: this.options.id ?? 'remote-system-one',
         quality: this.options.quality ?? 'low',
         latencyMs: performance.now() - started,
+        ...(body.model ? {model: body.model} : {}),
         ...(body.usage ? {usage: body.usage} : {}),
       } satisfies SystemOneAssessment
       this.record(options, questions, started, true, true)
@@ -143,7 +163,7 @@ export interface JevSystemOneOptions {
 interface JevLike {
   systemOne(
     request: {
-      state: Readonly<Record<string, unknown>>
+      state: SystemOneState
       questions: Readonly<Record<string, SystemOneQuestion>>
       model?: string
     },
@@ -164,7 +184,7 @@ export class JevSystemOne implements SystemOne {
   constructor(private readonly options: JevSystemOneOptions = {}) {}
 
   async assess(
-    state: Readonly<Record<string, unknown>>,
+    state: SystemOneState,
     questions: Readonly<Record<string, SystemOneQuestion>>,
     options: SystemOneAssessOptions = {},
   ): Promise<SystemOneAssessment | null> {
@@ -203,6 +223,7 @@ export class JevSystemOne implements SystemOne {
         backendId: this.options.id ?? 'jev',
         quality: this.options.quality ?? 'low',
         latencyMs: performance.now() - started,
+        ...(result.model ? {model: result.model} : {}),
         ...(result.usage ? {usage: result.usage} : {}),
       } satisfies SystemOneAssessment
       recordSystemOneMetric(options, assessment.backendId, assessment.quality, questions, assessment.latencyMs, true, true)
@@ -242,10 +263,11 @@ export interface LayaSystemOneOptions {
 
 interface LayaLike {
   systemOne(
-    state: Readonly<Record<string, unknown>>,
+    state: SystemOneState,
     questions: Readonly<Record<string, SystemOneQuestion>>,
   ): Promise<{
     answers?: Record<string, SystemOneAnswer>
+    model?: string
     usage?: Record<string, unknown>
   }>
 }
@@ -279,7 +301,7 @@ export class LayaSystemOne implements SystemOne {
   constructor(private readonly options: LayaSystemOneOptions = {}) {}
 
   async assess(
-    state: Readonly<Record<string, unknown>>,
+    state: SystemOneState,
     questions: Readonly<Record<string, SystemOneQuestion>>,
     options: SystemOneAssessOptions = {},
   ): Promise<SystemOneAssessment | null> {
@@ -310,6 +332,7 @@ export class LayaSystemOne implements SystemOne {
         backendId: this.options.id ?? 'laya',
         quality: this.options.quality ?? 'low',
         latencyMs: performance.now() - started,
+        ...(result.model ? {model: result.model} : {}),
         ...(result.usage ? {usage: result.usage} : {}),
       } satisfies SystemOneAssessment
       recordSystemOneMetric(options, assessment.backendId, assessment.quality, questions, assessment.latencyMs, true, true)
@@ -325,7 +348,7 @@ export class FallbackSystemOne implements SystemOne {
   constructor(private readonly backends: readonly SystemOne[]) {}
 
   async assess(
-    state: Readonly<Record<string, unknown>>,
+    state: SystemOneState,
     questions: Readonly<Record<string, SystemOneQuestion>>,
     options: SystemOneAssessOptions = {},
   ): Promise<SystemOneAssessment | null> {
