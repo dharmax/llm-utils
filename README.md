@@ -696,4 +696,6 @@ MIT © [dharmax](https://github.com/dharmax)
 
 ### Jev / TypeSafe System One
 
-`JevSystemOne` implements the same `SystemOne` contract as Laya and remote backends. The official `@typesafe-ai/sdk` is an optional runtime package and is loaded only when Jev is used. Configure it through `TYPESAFE_API_KEY` or explicit constructor options; it composes normally with `FallbackSystemOne`.
+`SystemOne` models the Jev-compatible domain contract rather than the smallest backend subset: string/object/array/null state, structured or nullable instructions and criteria, Choice/Score/Noul questions, and their probability/confidence/legend results. Adapters should reject unsupported forms explicitly rather than narrowing the shared interface.
+
+`JevSystemOne` uses the official `@typesafe-ai/sdk` when available; the package is loaded only when Jev is used. Configure it through `TYPESAFE_API_KEY` or explicit constructor options. Laya and remote backends implement the same shared contract and compose normally with `FallbackSystemOne`.
