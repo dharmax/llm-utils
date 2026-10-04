@@ -34,9 +34,12 @@ export class OpenAIAdapter implements ProviderAdapter {
         const {modelId, prompt, system, config, format, signal, timeoutMs, temperature, maxTokens, providerOptions} = options
         const baseUrl = (config.baseUrl ?? 'https://api.openai.com/v1').replace(/\/+$/, '')
         const {textFormat, fallbackSchema} = toOpenAiResponsesFormat(format)
-        const effectivePrompt = fallbackSchema
-            ? `${prompt}\n\nYou MUST respond with valid JSON adhering to this JSON Schema:\n${JSON.stringify(fallbackSchema, null, 2)}`
-            : prompt
+        let effectivePrompt = prompt
+        if (fallbackSchema) {
+            effectivePrompt = `${prompt}\n\nYou MUST respond with valid JSON adhering to this JSON Schema:\n${JSON.stringify(fallbackSchema, null, 2)}`
+        } else if (textFormat?.type === 'json_object' && !/json/i.test(prompt) && !(system && /json/i.test(system))) {
+            effectivePrompt = `${prompt}\n\nRespond with valid JSON.`
+        }
         const headers: Record<string, string> = {}
         if (config.apiKey) headers.Authorization = `Bearer ${config.apiKey}`
 
