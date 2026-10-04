@@ -12,6 +12,7 @@ Zero-Config Setup  →  1-Line Asks  →  Typed JSON (Zod)  →  Autonomous Acti
 
 * **Pure Modern Bun**: Built natively for Bun. Direct execution from `.ts` TypeScript source via the `"bun"` export condition with zero bundle or compilation overhead.
 * **First-Class Local LLM Support**: Native Ollama provider with `/api/chat`, host auto-detection (`OLLAMA_HOST` / `LOCAL_LLM_URL`), model discovery via `/api/tags`, and `preferLocal` routing to run 100% offline & private.
+* **Direct OpenAI Responses API**: Native OpenAI requests use `/responses`, including `max_output_tokens` and `text.format` structured output. Custom OpenAI-compatible `baseUrl` endpoints stay on Chat Completions for compatibility.
 * **OpenAI-Compatible Local Servers**: Seamlessly connects to vLLM, LM Studio, LocalAI, or llama.cpp servers via custom `baseUrl`.
 * **Zero-Ceremony Setup**: Automatically reads `OPENAI_API_KEY`, `GEMINI_API_KEY` / `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, `OLLAMA_HOST`, and `LOCAL_LLM_URL` from `process.env`.
 * **Automatic Typed JSON (`asker.json()`)**: Injects provider-native schema, strips markdown fences, repairs malformed JSON with `jsonrepair` (crucial for small local models like 3B/7B), and returns inferred `data: z.infer<typeof schema>`.
@@ -150,6 +151,8 @@ const asker = new Asker({
 ```
 
 For Ollama, `providerOptions` are sent inside the native `options` object. The same escape hatch is passed at the natural request level by the other built-in adapters.
+
+Direct OpenAI uses the Responses API. Custom OpenAI-compatible endpoints use Chat Completions unless they are the canonical `api.openai.com` base URL, avoiding an assumption that third-party compatibility servers implement `/responses`.
 
 `contextWindow`, `maxTokens`, and `temperature` may be provider defaults or per-call overrides; per-call values win. Typed controls also win over conflicting raw provider values: `contextWindow` controls Ollama `num_ctx`, `maxTokens` controls `num_predict`, and `temperature` controls `temperature`.
 
