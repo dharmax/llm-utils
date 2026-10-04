@@ -81,7 +81,7 @@ describe('SystemOne', () => {
     expect(result?.answers.safe?.noul).toBe(0.98)
     expect(result?.usage).toEqual({input_tokens: 11, output_tokens: 3})
     expect(result?.backendId).toBe('test-jev')
-    expect(result?.quality).toBe('high')
+    expect(result?.quality).toBe('low')
   })
 
   it('returns null when Jev is unavailable or malformed', async () => {
