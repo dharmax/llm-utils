@@ -251,6 +251,40 @@ test('Asker.ask infers provider from bare model names and local models', async (
     expect(targets[2]).toEqual({providerId: 'ollama', modelId: 'qwen2.5-coder:7b'})
 })
 
+test('Asker applies provider execution defaults and call overrides', async () => {
+    const captured: any[] = []
+    const completion = new CompletionEngine([]).registerAdapter({
+        id: 'ollama',
+        async generate(options) {
+            captured.push(options)
+            return {ok: true, text: 'ok', model: {providerId: 'ollama', modelId: options.modelId}}
+        },
+    })
+    const asker = new Asker({
+        providers: {
+            ollama: {
+                id: 'ollama',
+                available: true,
+                contextWindow: 16384,
+                maxTokens: 2048,
+                temperature: 0.3,
+            },
+        },
+        completion,
+        defaultModel: 'ollama/qwen-test',
+    })
+
+    await asker.ask('defaults')
+    await asker.ask('overrides', {contextWindow: 32768, maxTokens: 777, temperature: 0.1})
+
+    expect(captured[0].contextWindow).toBe(16384)
+    expect(captured[0].maxTokens).toBe(2048)
+    expect(captured[0].temperature).toBe(0.3)
+    expect(captured[1].contextWindow).toBe(32768)
+    expect(captured[1].maxTokens).toBe(777)
+    expect(captured[1].temperature).toBe(0.1)
+})
+
 test('Asker passes typed and provider-specific model parameters to adapters', async () => {
     let captured: any
     const completion = new CompletionEngine([]).registerAdapter({
