@@ -6,6 +6,7 @@ import {
     FileTemplateSource,
     InMemoryMetricsStore,
     LLMSession,
+    LLM_UTILS_VERSION,
     LlmMetrics,
     ModelRouter,
     OpenAIAdapter,
@@ -46,6 +47,11 @@ function registerEchoAdapter(id: string) {
         },
     })
 }
+
+test('bundled package version matches package metadata', async () => {
+    const pkg = await import('../package.json')
+    expect(LLM_UTILS_VERSION).toBe(pkg.default.version)
+})
 
 test('CompletionEngine owns adapters per instance', async () => {
     const first = registerEchoAdapter('isolated')
