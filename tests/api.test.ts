@@ -251,6 +251,42 @@ test('Asker.ask infers provider from bare model names and local models', async (
     expect(targets[2]).toEqual({providerId: 'ollama', modelId: 'qwen2.5-coder:7b'})
 })
 
+test('Asker passes typed and provider-specific model parameters to adapters', async () => {
+    let captured: any
+    const completion = new CompletionEngine([]).registerAdapter({
+        id: 'ollama',
+        async generate(options) {
+            captured = options
+            return {ok: true, text: 'ok', model: {providerId: 'ollama', modelId: options.modelId}}
+        },
+    })
+    const asker = new Asker({
+        providers: {
+            ollama: {
+                id: 'ollama',
+                available: true,
+                contextWindow: 8192,
+                providerOptions: {top_k: 20},
+            },
+        },
+        completion,
+        defaultModel: 'ollama/qwen-test',
+    })
+
+    await asker.ask('hello', {
+        contextWindow: 32768,
+        maxTokens: 777,
+        temperature: 0.2,
+        providerOptions: {top_p: 0.9},
+    })
+
+    expect(captured.contextWindow).toBe(32768)
+    expect(captured.maxTokens).toBe(777)
+    expect(captured.temperature).toBe(0.2)
+    expect(captured.providerOptions).toEqual({top_p: 0.9})
+    expect(captured.config.providerOptions).toEqual({top_k: 20})
+})
+
 test('Asker.json executes, parses, repairs, and returns typed data', async () => {
     const providerId = 'unit-json'
     let requestOptions: any
