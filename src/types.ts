@@ -71,8 +71,12 @@ export interface ProviderConfig {
     available?: boolean
     models?: ModelInfo[]
     local?: boolean
-    /** Provider context capacity where supported; Ollama maps this to num_ctx. */
+    /** Default context capacity where supported; Ollama maps this to num_ctx. */
     contextWindow?: number
+    /** Default maximum generated tokens. Per-call values override this. */
+    maxTokens?: number
+    /** Default sampling temperature. Per-call values override this. */
+    temperature?: number
     /** Provider-specific defaults. Adapters interpret these without llm-utils inventing a universal taxonomy. */
     providerOptions?: Record<string, unknown>
 }
