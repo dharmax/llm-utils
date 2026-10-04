@@ -56,6 +56,8 @@ export interface GenerationResult<T = unknown> {
     usage?: Usage
     model: ModelTarget
     failure?: LlmFailure
+    /** Provider-reported normal termination reason, e.g. stop/length. */
+    finishReason?: string
     raw?: unknown
     latencyMs?: number
 }
