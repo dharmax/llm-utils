@@ -405,6 +405,38 @@ test('ProviderDiscovery auto-detects and normalizes ollama host', async () => {
     }
 })
 
+test('ModelRouter honors configured defaults and explicit task routes over local preference', () => {
+    expect(new ModelRouter({
+        defaultModel: 'openai/gpt-custom',
+    }).resolve(undefined, ['openai', 'google'])).toEqual({
+        providerId: 'openai',
+        modelId: 'gpt-custom',
+    })
+
+    expect(new ModelRouter({
+        routes: {default: 'anthropic/claude-custom'},
+    }).resolve(undefined, ['anthropic', 'google'])).toEqual({
+        providerId: 'anthropic',
+        modelId: 'claude-custom',
+    })
+
+    expect(new ModelRouter({
+        defaultModel: 'ollama/qwen-local',
+        preferLocal: true,
+        routes: {'digest.review': 'openai/o3-review'},
+    }).resolve('digest.review', ['ollama', 'openai'])).toEqual({
+        providerId: 'openai',
+        modelId: 'o3-review',
+    })
+
+    expect(new ModelRouter({
+        preferLocal: true,
+    }).resolve('gpt-4o', ['ollama', 'openai'])).toEqual({
+        providerId: 'openai',
+        modelId: 'gpt-4o',
+    })
+})
+
 test('ModelRouter resolves explicit targets, bare models, and custom router functions', () => {
     const router = new ModelRouter({
         routes: {
