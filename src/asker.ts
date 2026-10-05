@@ -292,7 +292,8 @@ export class Asker {
     }
 
     /**
-     * Convenience method for local-only execution (defaults to Ollama / local models).
+     * Convenience method for local-preferred execution (defaults to Ollama / local models).
+     * Explicit model/task routes remain authoritative.
      */
     async local<T = unknown>(
         prompt: string,
