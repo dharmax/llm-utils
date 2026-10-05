@@ -272,15 +272,15 @@ export class LLMActor {
                 'Select a smaller run-local tool surface before invoking LLMActor.',
             )
         }
-        const systemPrompt = this.buildSystemPrompt(catalog)
+        const registeredToolNames = [...tools.keys()]
+        const missingToolHandler = runLocalTools ? onMissingTool : (this.onMissingTool ?? onMissingTool)
+        const systemPrompt = this.buildSystemPrompt(catalog, Boolean(missingToolHandler))
 
         const conversationPrompt = this.buildTurnPrompt(goal, history, stepNumber)
 
         const {schema: _s1, ...defaultOpts} = this.defaultAskOptions ?? {}
         const {schema: _s2, ...overrideOpts} = overrideOptions ?? {}
 
-        const registeredToolNames = [...tools.keys()]
-        const missingToolHandler = runLocalTools ? onMissingTool : (this.onMissingTool ?? onMissingTool)
         const decisionSchema = missingToolHandler
             ? createActorDecisionSchema([])
             : createActorDecisionSchema(registeredToolNames)
@@ -585,8 +585,11 @@ export class LLMActor {
         }).join('\n\n')
     }
 
-    private buildSystemPrompt(catalog: string): string {
+    private buildSystemPrompt(catalog: string, canRecoverMissingTool: boolean): string {
         const userCustom = this.system ? `${this.system}\n\n` : ''
+        const toolRule = canRecoverMissingTool
+            ? 'Use the explicitly declared tools whenever possible. If the goal clearly requires a capability that is absent, you may request that one missing capability by a concise functional name; the runtime will attempt bounded semantic recovery.'
+            : 'Only invoke tools explicitly declared in Available Tools above. Never invent or guess tool names.'
         return `${userCustom}You are an autonomous acting agent equipped with tools to accomplish the user's goal.
 
 ## Available Tools
@@ -595,7 +598,7 @@ ${catalog}
 ## Operational Rules
 1. Reason carefully in the "thought" field before taking action.
 2. To gather info or modify state, set action="tool_call" and specify toolCalls with concrete runtime parameter values (e.g. { "callId": "1", "name": "tool_name", "parameters": { "paramName": "actual_value" } }).
-3. Only invoke tools that are explicitly declared in Available Tools above. NEVER invent or guess tool names.
+3. ${toolRule}
 4. A tool error or failure is an observation to reason from, NOT proof that the goal is impossible. When a tool fails or reports invalid arguments:
    - Repair invalid parameters or inputs;
    - Choose an alternative registered tool or capability;
