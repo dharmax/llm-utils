@@ -102,6 +102,9 @@ export class ModelRouter {
         if (advice) {
             const current = providers ?? Object.fromEntries(availableProviders.map(id => [id, {id, available: true}]))
             for (const choice of [advice.primary, ...advice.fallbacks]) {
+                const provider = current[choice.target.providerId]
+                if (useLocal && choice.target.providerId !== 'ollama' && !provider?.local)
+                    continue
                 if (availableProviders.includes(choice.target.providerId) && isAdviceUsable(choice, current))
                     return {...choice.target}
             }
