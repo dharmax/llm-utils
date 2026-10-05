@@ -28,6 +28,7 @@ export class LLMSession {
             initialHistory?: SessionMessage[]
             maxHistory?: number
             maxHistoryTurns?: number
+            maxHistoryChars?: number
             system?: string
         } = {},
     ) {
@@ -173,6 +174,29 @@ ${goal}`
         const max = this.options.maxHistory ?? this.options.maxHistoryTurns ?? 50
         if (this._history.length > max)
             this._history = this._history.slice(-max)
+
+        const maxChars = this.options.maxHistoryChars
+        if (!maxChars || maxChars <= 0) return
+
+        let remaining = maxChars
+        const bounded: SessionMessage[] = []
+        for (let i = this._history.length - 1; i >= 0 && remaining > 0; i -= 1) {
+            const message = this._history[i]!
+            if (message.content.length <= remaining) {
+                bounded.unshift(message)
+                remaining -= message.content.length
+                continue
+            }
+
+            const marker = '\n...[history truncated]'
+            const keep = Math.max(0, remaining - marker.length)
+            bounded.unshift({
+                ...message,
+                content: message.content.slice(0, keep) + marker,
+            })
+            remaining = 0
+        }
+        this._history = bounded
     }
 
     get history(): SessionMessage[] {
