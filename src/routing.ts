@@ -100,7 +100,7 @@ export class ModelRouter {
 
         const advice = snapshot?.workloads[targetStr || 'default']
         if (advice) {
-            const current = providers ?? Object.fromEntries(availableProviders.map(id => [id, {id, available: true}]))
+            const current: Record<string, ProviderConfig> = providers ?? Object.fromEntries(availableProviders.map(id => [id, {id, available: true}]))
             for (const choice of [advice.primary, ...advice.fallbacks]) {
                 const provider = current[choice.target.providerId]
                 if (useLocal && choice.target.providerId !== 'ollama' && !provider?.local)

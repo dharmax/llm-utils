@@ -6,6 +6,15 @@ import {parseStructuredJsonResult, zodToJsonSchema} from './structured-json.ts'
 import type {AskOptions} from './types.ts'
 import {childMetricsContext, emitMetric, type MetricsContext, type MetricsSink} from './metrics.ts'
 
+/** Explicit user refusal/cancellation. Ordinary execution failures throw Error. */
+export class ToolAbortError extends Error {
+    constructor(message: string) {
+        super(message)
+        this.name = 'ToolAbortError'
+    }
+}
+
+/** Return only successful operations; throw failures, or ToolAbortError to halt the run. */
 export interface ToolDefinition<TParams = any, TResult = any> {
     name: string
     description: string
@@ -86,6 +95,7 @@ export interface ActorStepResult {
     record: ActorStepRecord
     isDone: boolean
     error?: string
+    aborted?: boolean
 }
 
 export function createActorDecisionSchema(registeredToolNames: string[] = []): z.ZodType<ActorDecision> {
@@ -313,6 +323,7 @@ export class LLMActor {
         }))
 
         const toolResults: ToolExecutionResult[] = []
+        let abortError: string | undefined
 
         for (const call of toolCalls) {
             let tool = tools.get(call.toolName)
@@ -342,6 +353,7 @@ export class LLMActor {
                         isError: true,
                         error: `Error in onMissingTool handler for "${call.toolName}": ${err instanceof Error ? err.message : String(err)}`,
                     })
+                    if (err instanceof ToolAbortError) { abortError = err.message; break }
                     continue
                 }
             }
@@ -389,6 +401,7 @@ export class LLMActor {
                     isError: true,
                     error: err instanceof Error ? err.message : String(err),
                 })
+                if (err instanceof ToolAbortError) { abortError = err.message; break }
             }
         }
 
@@ -400,7 +413,9 @@ export class LLMActor {
             toolResults,
         }
 
-        return {record, isDone: false}
+        return abortError !== undefined
+            ? {record, isDone: true, error: abortError, aborted: true}
+            : {record, isDone: false}
     }
 
     /**
@@ -493,13 +508,13 @@ export class LLMActor {
                 }
             }
 
-            if (stepResult.error) {
+            if (stepResult.error !== undefined) {
                 return finish({
                     ok: false,
                     finalText: '',
                     steps,
                     totalSteps: steps.length,
-                    haltReason: 'error',
+                    haltReason: stepResult.aborted ? 'aborted' : 'error',
                     error: stepResult.error,
                 })
             }

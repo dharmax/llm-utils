@@ -74,7 +74,7 @@ export class LLMSession {
     async run<T = unknown>(
         actor: LLMActor,
         goal: string,
-        options: ActorRunOptions<T> = {},
+        options: ActorRunOptions<T> & { userInput?: string } = {},
     ): Promise<ActorRunResult<T>> {
         const contextualGoal = this._history.length > 0
             ? `## Session History
@@ -84,19 +84,22 @@ ${this.renderHistory()}
 ${goal}`
             : goal
 
-        const result = await actor.run(contextualGoal, options)
-
-        if (result.ok) {
-            this._history.push({role: 'user', content: goal})
-
-            const observations = this.renderActorObservations(result.steps)
-            if (observations)
-                this._history.push({role: 'system', content: observations})
-
-            this._history.push({role: 'ai', content: result.finalText})
+        const {userInput = goal, ...runOptions} = options
+        this._history.push({role: 'user', content: userInput})
+        let result: ActorRunResult<T>
+        try {
+            result = await actor.run(contextualGoal, runOptions)
+        } catch (error) {
+            this._history.push({role: 'system', content: 'Actor execution failed: ' + (error instanceof Error ? error.message : String(error))})
             this.pruneHistory()
+            throw error
         }
 
+        const observations = this.renderActorObservations(result.steps)
+        if (observations) this._history.push({role: 'system', content: observations})
+        if (result.ok) this._history.push({role: 'ai', content: result.finalText})
+        else this._history.push({role: 'system', content: 'Actor stopped (' + result.haltReason + '): ' + (result.error ?? 'Execution did not complete.')})
+        this.pruneHistory()
         return result
     }
 
