@@ -175,6 +175,24 @@ test('reconstructed router and Asker reuse persistent primary with zero authorit
     expect(new ModelRouter({advicePath: path, providers: current()}).resolve('code', ['ollama', 'remote'])).toEqual(local('installed:7b').target)
 })
 
+test('local preference filters remote advice and Asker.local stays local', async () => {
+    mockOllama()
+    await refreshModelAdvice(authority({...research(), workloads: {
+        default: {primary: remote, fallbacks: [local('installed:7b')]},
+        code: {primary: remote, fallbacks: [local('installed:7b')]},
+    }}), {default: 'General work', code: 'Agentic coding'}, {providers, hardware, advicePath: path})
+
+    const configs = current()
+    const router = new ModelRouter({advicePath: path, providers: configs, preferLocal: true})
+    expect(router.resolve(undefined, ['ollama', 'remote'])).toEqual(local('installed:7b').target)
+    expect(router.resolve('code', ['ollama', 'remote'])).toEqual(local('installed:7b').target)
+
+    const calls = mockOllama()
+    const asker = new Asker({advicePath: path, providers, completion: completion()})
+    expect((await asker.local('Keep this local')).model).toEqual(local('installed:7b').target)
+    expect(calls).toEqual(['http://fixture:11434/api/tags'])
+})
+
 test('explicit targets, bare model overrides and configured task routes outrank advice', async () => {
     mockOllama()
     await refresh()
