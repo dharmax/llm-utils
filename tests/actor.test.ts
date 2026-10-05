@@ -658,3 +658,33 @@ test('LLMActor.run treats unresolvable run-local missing tools as ordinary tool 
     expect(result.steps[0].toolResults[0].error).toContain('not available for this run')
     expect(result.finalText).toBe('handled missing tool')
 })
+
+test('LLMActor refuses an oversized tool catalog before calling the provider', async () => {
+    let calls = 0
+    const asker = {
+        json: async () => {
+            calls++
+            return {
+                ok: true,
+                data: {
+                    thought: 'Should never run.',
+                    action: 'final_answer',
+                    finalAnswer: 'unexpected',
+                },
+            }
+        },
+    } as any
+
+    const actor = new LLMActor(asker, {
+        maxToolCatalogChars: 200,
+        tools: [{
+            name: 'huge_tool',
+            description: 'x'.repeat(500),
+            parameters: z.object({query: z.string()}),
+            execute: () => 'unused',
+        }],
+    })
+
+    await expect(actor.run('Do something')).rejects.toThrow('Tool catalog too large')
+    expect(calls).toBe(0)
+})
