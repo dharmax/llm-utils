@@ -688,3 +688,31 @@ test('LLMActor refuses an oversized tool catalog before calling the provider', a
     await expect(actor.run('Do something')).rejects.toThrow('Tool catalog too large')
     expect(calls).toBe(0)
 })
+
+test('LLMActor advertises bounded missing-tool recovery only when a resolver exists', async () => {
+    const systems: string[] = []
+    const asker = {
+        json: async (_prompt: string, _schema: unknown, options: any) => {
+            systems.push(options.system ?? '')
+            return {
+                ok: true,
+                data: {
+                    thought: 'Done.',
+                    action: 'final_answer',
+                    finalAnswer: 'done',
+                },
+            }
+        },
+    } as any
+
+    const actor = new LLMActor(asker)
+    await actor.run('No recovery', {tools: []})
+    await actor.run('Recovery allowed', {
+        tools: [],
+        onMissingTool: async () => undefined,
+    })
+
+    expect(systems[0]).toContain('Never invent or guess tool names')
+    expect(systems[0]).not.toContain('bounded semantic recovery')
+    expect(systems[1]).toContain('bounded semantic recovery')
+})
