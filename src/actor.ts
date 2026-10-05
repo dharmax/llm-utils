@@ -61,6 +61,8 @@ export interface ActorRunResult<T = unknown> {
 export interface ActorOptions {
     tools?: ToolDefinition[]
     maxSteps?: number
+    /** Hard guard against accidentally serializing a global capability universe into one prompt. */
+    maxToolCatalogChars?: number
     system?: string
     askOptions?: AskOptions
     onStep?: (record: ActorStepRecord) => void | Promise<void>
@@ -192,6 +194,7 @@ export function normalizeToolParameters(params: Record<string, unknown>, schema:
 export class LLMActor {
     private readonly tools = new Map<string, ToolDefinition>()
     private readonly maxSteps: number
+    private readonly maxToolCatalogChars: number
     private readonly system?: string
     private readonly defaultAskOptions?: AskOptions
     private readonly onStep?: (record: ActorStepRecord) => void | Promise<void>
@@ -207,6 +210,7 @@ export class LLMActor {
         options: ActorOptions = {},
     ) {
         this.maxSteps = options.maxSteps ?? 5
+        this.maxToolCatalogChars = options.maxToolCatalogChars ?? 32_000
         this.system = options.system
         this.defaultAskOptions = options.askOptions
         this.onStep = options.onStep
@@ -262,6 +266,12 @@ export class LLMActor {
     ): Promise<ActorStepResult> {
         const stepNumber = history.length + 1
         const catalog = this.renderToolCatalog(tools)
+        if (catalog.length > this.maxToolCatalogChars) {
+            throw new Error(
+                `Tool catalog too large (${catalog.length} chars > ${this.maxToolCatalogChars}). ` +
+                'Select a smaller run-local tool surface before invoking LLMActor.',
+            )
+        }
         const systemPrompt = this.buildSystemPrompt(catalog)
 
         const conversationPrompt = this.buildTurnPrompt(goal, history, stepNumber)
