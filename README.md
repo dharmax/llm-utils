@@ -11,7 +11,7 @@ Zero-Config Setup  →  1-Line Asks  →  Typed JSON (Zod)  →  Autonomous Acti
 ## Highlights
 
 * **Pure Modern Bun**: Built natively for Bun. Direct execution from `.ts` TypeScript source via the `"bun"` export condition with zero bundle or compilation overhead.
-* **First-Class Local LLM Support**: Native Ollama provider with `/api/chat`, host auto-detection (`OLLAMA_HOST` / `LOCAL_LLM_URL`), model discovery via `/api/tags`, and `preferLocal` routing to run 100% offline & private.
+* **First-Class Local LLM Support**: Native Ollama provider with `/api/chat`, host auto-detection (`OLLAMA_HOST` / `LOCAL_LLM_URL`), model discovery via `/api/tags`, and local-preferred routing for offline/private workloads.
 * **Direct OpenAI Responses API**: Native OpenAI requests use `/responses`, including `max_output_tokens` and `text.format` structured output. Custom OpenAI-compatible `baseUrl` endpoints stay on Chat Completions for compatibility.
 * **OpenAI-Compatible Local Servers**: Seamlessly connects to vLLM, LM Studio, LocalAI, or llama.cpp servers via custom `baseUrl`.
 * **Zero-Ceremony Setup**: Automatically reads `OPENAI_API_KEY`, `GEMINI_API_KEY` / `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, `OLLAMA_HOST`, and `LOCAL_LLM_URL` from `process.env`.
@@ -43,7 +43,7 @@ bun add @dharmax/llm-utils zod
 | **`PromptEngine`** | `load(name)`<br>`render(template, vars)` | Multipart prompt template engine with YAML/JSON frontmatter and dot-notation paths. |
 | **`FileTemplateSource`** | `load(name)` | Filesystem template loader for `.prompt`, `.md`, and `.txt` files. |
 | **`LlmMetrics`** | `record(event)`<br>`totals()`<br>`query(filter)` | Token accounting, latency tracking, pricing calculations, and PubSub event emission. |
-| **`ProviderDiscovery`** | `discoverOllama(url?)` | Auto-detects local Ollama instance and enumerates installed models. |
+| **`ProviderDiscovery`** | `discover()`<br>`discoverEnvironment(opts?)`<br>`probeOllama(url?, opts?)` | Discovers providers, sanitized hardware/access facts, and installed Ollama models. |
 | **`ModelRouter`** | `resolve(target, opts)` | Maps task classes, bare model names, and provider targets to endpoints. |
 
 ---
@@ -141,6 +141,7 @@ Malformed output or a failed refresh preserves the previous file.
 
 Routing priority is explicit model, explicit configured task route/custom hook,
 usable persisted primary and ranked fallbacks, then legacy task/default routing.
+When local preference is active, remote persisted advice is skipped; explicit model and configured task routes still keep their normal precedence.
 Explicit configured defaults still govern calls without a task. Normal routing
 does no research. `Asker` checks Ollama tags before using local advice, skips
 disabled/unavailable providers and known inaccessible models, and never pulls.
@@ -274,7 +275,8 @@ import { Asker } from '@dharmax/llm-utils'
 
 const asker = new Asker()
 
-// Automatically targets local Ollama (qwen2.5-coder:7b by default)
+// Prefers usable local advice/models; falls back to the legacy local route when needed.
+// Explicit model/task routes remain authoritative.
 const res = await asker.local('Summarize this private diff.')
 console.log(res.text)
 
@@ -309,11 +311,12 @@ const res = await asker.ask('Hello from local server', { model: 'lmstudio/local-
 Target high-level task aliases rather than hardcoding model names:
 
 ```ts
-await asker.ask('Build an LRU cache', { task: 'code' })        // openai/gpt-4o
-await asker.ask('Quick spellcheck', { task: 'fast' })         // google/gemini-2.0-flash
-await asker.ask('Complex logic puzzle', { task: 'reasoning' }) // openai/o3-mini
-await asker.ask('Creative story', { task: 'creative' })       // anthropic/claude-3-7-sonnet
-await asker.ask('Local privacy task', { task: 'local' })       // ollama/qwen2.5-coder:7b
+await asker.ask('Build an LRU cache', { task: 'code' })
+await asker.ask('Quick spellcheck', { task: 'fast' })
+await asker.ask('Complex logic puzzle', { task: 'reasoning' })
+await asker.ask('Creative story', { task: 'creative' })
+await asker.ask('Local privacy task', { task: 'local' })
+// Persisted model advice is consulted before the legacy built-in task routes.
 ```
 
 Configure custom routers or target models when instantiating `Asker`:
