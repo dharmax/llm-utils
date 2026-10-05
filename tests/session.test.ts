@@ -94,3 +94,16 @@ test('LLMSession.appendMessage ingests external messages into session context', 
     expect(history[1].content).toContain('/home/dharmax/work')
 })
 
+
+test('LLMSession bounds replayable history by character budget', () => {
+    const session = new LLMSession({} as Asker, {maxHistoryChars: 40})
+    session.appendMessage({role: 'user', content: 'first message that should be displaced'})
+    session.appendMessage({role: 'system', content: 'latest observation is intentionally much longer than the remaining history budget'})
+
+    const history = session.getHistory()
+    const total = history.reduce((sum, message) => sum + message.content.length, 0)
+
+    expect(total).toBeLessThanOrEqual(40)
+    expect(history.at(-1)?.content).toContain('latest observation')
+    expect(history.at(-1)?.content).toContain('[history truncated]')
+})
