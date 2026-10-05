@@ -4,7 +4,8 @@ import {CompletionEngine} from './completion.ts'
 import {type ContextRequest, type ContextResolver, resolveContext} from './context.ts'
 import {FileTemplateSource, PromptEngine} from './prompts.ts'
 import {ProviderCircuit} from './provider-circuit.ts'
-import {ModelRouter} from './routing.ts'
+import {ModelRouter, parseModelTarget} from './routing.ts'
+import {ProviderDiscovery} from './discovery.ts'
 import {childMetricsContext, emitMetric, type MetricsSink} from './metrics.ts'
 import {
     parseStructuredJsonResult,
@@ -41,6 +42,7 @@ export interface AskerOptions {
     contextResolver?: ContextResolver
     circuit?: ProviderCircuit
     metricsSink?: MetricsSink
+    advicePath?: string | false
 }
 
 export class Asker {
@@ -66,6 +68,7 @@ export class Asker {
             routes: options.routes,
             defaultModel: options.defaultModel,
             preferLocal: this.preferLocal,
+            advicePath: options.advicePath,
         })
 
         // Configure providers (with environment variable auto-discovery)
@@ -146,11 +149,17 @@ export class Asker {
         prompt: string,
         options: AskOptions<T> = {},
     ): Promise<GenerationResult<T>> {
-        const available = [...this.providers.keys()]
+        const current = Object.fromEntries(this.providers)
+        if (!options.model && this.router.needsLocalAdviceCheck(options.task) && current.ollama && current.ollama.enabled !== false && current.ollama.available !== false) {
+            const probe = await ProviderDiscovery.probeOllama(current.ollama.host)
+            current.ollama = {...current.ollama, available: probe.installed, models: probe.models}
+        }
+        const available = Object.entries(current).filter(([, config]) => config.available !== false && config.enabled !== false).map(([id]) => id)
         const target = this.router.resolve(
-            options.model ?? options.task,
+            options.model ? parseModelTarget(options.model) : options.task,
             available,
             options.preferLocal ?? this.preferLocal,
+            current,
         )
         const config = options.providerConfig
             ?? this.providers.get(target.providerId)

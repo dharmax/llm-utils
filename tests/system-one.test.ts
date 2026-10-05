@@ -165,13 +165,13 @@ describe('SystemOne', () => {
   it('uses the shared remote protocol and preserves answers', async () => {
     const systemOne = new RemoteSystemOne({
       url: 'http://system-one.test/',
-      fetch: async (_input, init) => {
+      fetch: (async (_input, init) => {
         expect(JSON.parse(String(init?.body))).toEqual({state: {input: 'x'}, questions})
         return new Response(JSON.stringify({
           ok: true,
           answers: {safe: {noul: 0.7}},
         }))
-      },
+      }) as typeof fetch,
     })
 
     const result = await systemOne.assess({input: 'x'}, questions)

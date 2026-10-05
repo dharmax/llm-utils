@@ -83,6 +83,84 @@ bun run index.ts
 
 ---
 
+## Persistent model advice
+
+`refreshModelAdvice(authority, workloads, options?)` is the only operation that
+researches model recommendations. The caller supplies a live/web-aware authority;
+llm-utils discovers the environment, builds the research prompt and JSON schema,
+validates the response, and atomically saves one snapshot. There is no automatic
+refresh or expiry.
+
+```ts
+import {
+    Asker, ProviderDiscovery, refreshModelAdvice, readModelAdvice,
+    type ModelAdviceAuthority,
+} from '@dharmax/llm-utils'
+
+const providers = await ProviderDiscovery.discover()
+// Supply your live/web-aware reasoning integration; research must return an object
+// (or JSON string) matching request.schema. This interface does not supply web tools.
+async function updateAdvice(authority: ModelAdviceAuthority) {
+    return refreshModelAdvice(authority, {
+        code: {description: 'Coding with tools', constraints: ['Reliable structured output']},
+        reasoning: 'Difficult analysis',
+        fast: 'Short low-latency answers',
+    }, {
+        providers,
+        entitlements: {openai: ['Caller-declared subscription']},
+        constraints: ['Minimize total cost per successfully completed task'],
+        // metrics: existing LlmMetrics instance (only per-model aggregates are sent)
+    })
+}
+
+const advice = readModelAdvice()
+console.log(advice?.recommendedPulls) // inspection only; no automatic installation
+const asker = new Asker({providers})
+await asker.ask('Review this code', {task: 'code'})
+await asker.ask('Review this code', {model: 'ollama/my-explicit-model:latest'})
+```
+
+The authority contract is
+`{id: string, research({prompt: string, schema: JsonSchema}): Promise<unknown>}`.
+It returns `{workloads, recommendedPulls, notes}`; each workload contains a
+`primary` recommendation and ranked `fallbacks`. Exported
+`ModelAdviceResearchSchema`, `ModelRecommendationSchema` and
+`ModelAdviceSnapshotSchema` describe the validated formats. Recommendations
+retain context, capabilities, input/output/cached-input pricing per million
+tokens, token efficiency, reasoning overhead, retry risk, local fit, quality,
+reasons and evidence. The snapshot adds timestamp, advisor identity and sanitized
+environment facts.
+
+`readModelAdvice(path?)` returns `ModelAdviceSnapshot | undefined`.
+`refreshModelAdvice(..., {advicePath})` writes to a custom path; pass that same
+`advicePath` to `Asker` or `ModelRouter`. The default is
+`$XDG_CONFIG_HOME/llm-utils/model-advice.json`, or
+`~/.config/llm-utils/model-advice.json`. `modelAdvicePath()` returns it.
+Set `advicePath: false` on the router/asker to disable advice.
+Malformed output or a failed refresh preserves the previous file.
+
+Routing priority is explicit model, explicit configured task route/custom hook,
+usable persisted primary and ranked fallbacks, then legacy task/default routing.
+Explicit configured defaults still govern calls without a task. Normal routing
+does no research. `Asker` checks Ollama tags before using local advice, skips
+disabled/unavailable providers and known inaccessible models, and never pulls.
+For synchronous `ModelRouter.resolve(task, availableProviders?, preferLocal?, providers?)`,
+supply current provider configs/model lists via the fourth argument or constructor
+`providers`; local advice is skipped when installation is unknown. Availability
+changes do not rewrite the saved advice.
+
+`ProviderDiscovery.discoverEnvironment(options?)` returns sanitized hardware,
+installed Ollama tags/show metadata, configured/verified access, known model lists,
+and explicitly declared `ProviderConfig.entitlements` or `options.entitlements`.
+Unlike `discover()`, its result contains no credentials or raw provider options.
+Built-in remote checks authenticate model-list requests where supported; listing
+does not prove successful inference, billing access, or that a chat subscription
+grants API access. Custom providers can supply `verifyProvider(config)`.
+Unknown or partial model lists remain unknown. Hardware evidence describes the
+process host (RAM/CPU, optional NVIDIA or Linux DRM VRAM); remote Ollama hardware
+must be supplied through `options.hardware` if relevant. Research quality and
+current evidence depend on the caller's authority.
+
 ## Core Execution: `Asker`
 
 ### 1. Plain Text Asks

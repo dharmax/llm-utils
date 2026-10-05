@@ -71,6 +71,8 @@ export interface ProviderConfig {
     available?: boolean
     models?: ModelInfo[]
     local?: boolean
+    /** Caller-declared facts, never inferred from credentials. */
+    entitlements?: string[]
     /** Default context capacity where supported; Ollama maps this to num_ctx. */
     contextWindow?: number
     /** Default maximum generated tokens. Per-call values override this. */
@@ -87,6 +89,11 @@ export interface ModelInfo {
     quality?: 'low' | 'medium' | 'high'
     local?: boolean
     sizeB?: number
+    parameterSize?: string
+    quantization?: string
+    family?: string
+    architecture?: string
+    contextWindow?: number
 }
 
 export interface GenerateOptions {

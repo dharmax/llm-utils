@@ -33,6 +33,7 @@ test('callback can enumerate meaningful destinations without guessing IDs or dep
             case 'inspect': return {action: 'goto', stepId: 'memory'}
             case 'memory': return {action: 'goto', stepId: 'report'}
         }
+        return undefined
     }})
     expect(result.ok).toBe(true)
     expect(targetNames[0]).toEqual(['Collect baseline', 'Investigate memory', 'Investigate CPU'])
@@ -51,6 +52,7 @@ test('target list drops invalidated prerequisites after a backward transition', 
         seen.push(availableTransitionTargets(context).map(target => target.id))
         if (context.step.id === 'check' && ++checks === 1)
             return {action: 'goto', stepId: 'sample'}
+        return undefined
     }})
     expect(result.ok).toBe(true)
     // After re-sampling, the previous check was invalidated; reporting isn't reachable yet.

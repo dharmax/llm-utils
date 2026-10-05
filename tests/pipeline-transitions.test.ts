@@ -44,6 +44,7 @@ test('switch-style branching executes the chosen path and joins', async () => {
                 case 'memory':
                 case 'cpu': return {action: 'goto', stepId: 'finish'}
             }
+            return undefined
         }})
         expect(result.ok).toBe(true)
         expect(visited).toEqual(['inspect', branch, 'finish'])
@@ -56,6 +57,7 @@ test('unknown condition takes an explicit observation path', async () => {
     const result = await pipeline.run('Diagnose', {onTransition: ({step}) => {
         if (step.id === 'inspect') return {action: 'goto', stepId: 'gather'}
         if (step.id === 'gather') return {action: 'goto', stepId: 'finish'}
+        return undefined
     }})
     expect(result.ok).toBe(true)
     expect(visited).toEqual(['inspect', 'gather', 'finish'])
@@ -70,6 +72,7 @@ test('backward goto loops with bounded visits and chronological history', async 
                 expect(history.at(-1)?.stepId).toBe('check')
                 return {action: 'goto', stepId: 'sample'}
             }
+            return undefined
         },
     })
     expect(result.ok).toBe(true)

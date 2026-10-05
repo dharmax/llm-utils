@@ -1,4 +1,5 @@
-import type {ModelTarget, ProviderId} from './types.ts'
+import type {ModelTarget, ProviderConfig, ProviderId} from './types.ts'
+import {isAdviceUsable, readModelAdvice, type ModelAdviceSnapshot} from './model-advice.ts'
 
 export interface TaskRouteMap {
     [task: string]: string | ModelTarget
@@ -11,6 +12,10 @@ export interface ModelRouterOptions {
     router?: CustomRouterFn
     preferLocal?: boolean
     defaultModel?: string | ModelTarget
+    /** Defaults to the user-level snapshot. false disables advice. */
+    advicePath?: string | false
+    /** Supply current model lists for synchronous availability validation. */
+    providers?: Record<string, ProviderConfig>
 }
 
 export const DEFAULT_TASK_ROUTES: TaskRouteMap = {
@@ -28,9 +33,17 @@ export class ModelRouter {
     private readonly customRouter?: CustomRouterFn
     private readonly defaultModel: ModelTarget
     private readonly preferLocal: boolean
+    private readonly explicitRoutes: TaskRouteMap
+    private readonly configuredDefault: boolean
+    private readonly advicePath?: string | false
+    private readonly providers?: Record<string, ProviderConfig>
 
     constructor(options: ModelRouterOptions = {}) {
         this.routes = {...DEFAULT_TASK_ROUTES, ...options.routes}
+        this.explicitRoutes = {...options.routes}
+        this.configuredDefault = options.defaultModel !== undefined || options.routes?.default !== undefined
+        this.advicePath = options.advicePath
+        this.providers = options.providers
         this.customRouter = options.router
         this.preferLocal = Boolean(options.preferLocal)
         this.defaultModel = parseModelTarget(
@@ -46,8 +59,9 @@ export class ModelRouter {
      */
     resolve(
         targetOrTask?: string | ModelTarget,
-        availableProviders: string[] = ['google', 'openai', 'anthropic', 'ollama'],
+        availableProviders: string[] = this.providers ? Object.keys(this.providers) : ['google', 'openai', 'anthropic', 'ollama'],
         preferLocalOverride?: boolean,
+        providers = this.providers,
     ): ModelTarget {
         const useLocal = preferLocalOverride !== undefined ? preferLocalOverride : this.preferLocal
 
@@ -60,6 +74,13 @@ export class ModelRouter {
         if (targetStr.includes('/'))
             return parseModelTarget(targetStr)
 
+        const snapshot = this.getModelAdvice()
+        // Known task keys are tasks; other recognizable bare model names are explicit selections.
+        if (targetStr && !this.routes[targetStr] && !snapshot?.workloads[targetStr]) {
+            const inferred = inferProviderFromModelName(targetStr)
+            if (inferred) return {providerId: inferred, modelId: targetStr}
+        }
+
         // 2. Custom router hook
         if (targetStr && this.customRouter) {
             const custom = this.customRouter(targetStr, availableProviders)
@@ -68,18 +89,29 @@ export class ModelRouter {
         }
 
         // 3. Explicit task routes outrank preferences.
-        if (targetStr && this.routes[targetStr]) {
-            const mapped = this.routes[targetStr]
+        const configured = this.explicitRoutes[targetStr || 'default']
+            ?? (!targetStr && this.configuredDefault ? this.defaultModel : undefined)
+        if (configured) {
+            const mapped = configured
             const parsed = typeof mapped === 'string' ? parseModelTarget(mapped) : mapped
             if (availableProviders.length === 0 || availableProviders.includes(parsed.providerId))
                 return parsed
         }
 
-        // 4. A bare model name is still an explicit model choice.
-        if (targetStr) {
-            const inferred = inferProviderFromModelName(targetStr)
-            if (inferred)
-                return {providerId: inferred, modelId: targetStr}
+        const advice = snapshot?.workloads[targetStr || 'default']
+        if (advice) {
+            const current = providers ?? Object.fromEntries(availableProviders.map(id => [id, {id, available: true}]))
+            for (const choice of [advice.primary, ...advice.fallbacks]) {
+                if (availableProviders.includes(choice.target.providerId) && isAdviceUsable(choice, current))
+                    return {...choice.target}
+            }
+        }
+
+        // Legacy task routes remain the last resort after persisted advice.
+        if (targetStr && this.routes[targetStr]) {
+            const parsed = parseModelTarget(this.routes[targetStr]!)
+            if (availableProviders.length === 0 || availableProviders.includes(parsed.providerId))
+                return parsed
         }
 
         // 5. Local preference applies only when no explicit model/task route resolved.
@@ -90,6 +122,17 @@ export class ModelRouter {
         }
 
         return this.resolveDefault(availableProviders, useLocal)
+    }
+
+    getModelAdvice(): ModelAdviceSnapshot | undefined {
+        return this.advicePath === false ? undefined : readModelAdvice(this.advicePath)
+    }
+
+    /** Asker can recheck local installation only for tasks that could consult advice. */
+    needsLocalAdviceCheck(task?: string): boolean {
+        if (this.explicitRoutes[task || 'default'] || (!task && this.configuredDefault)) return false
+        const advice = this.getModelAdvice()?.workloads[task || 'default']
+        return Boolean(advice && [advice.primary, ...advice.fallbacks].some(r => r.availability === 'installed' && r.target.providerId === 'ollama'))
     }
 
     private resolveDefault(availableProviders: string[], useLocal = false): ModelTarget {

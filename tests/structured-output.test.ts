@@ -95,7 +95,7 @@ test('OpenAI, Google, and Ollama format payloads and normalize URLs correctly', 
         calls.push({url: String(url), body})
         if (String(url).includes('openai')) {
             return new Response(JSON.stringify({
-                choices: [{message: {content: '{"value":"openai"}'}}],
+                output: [{type: 'message', content: [{type: 'output_text', text: '{"value":"openai"}'}]}],
             }))
         }
         if (String(url).includes('generativelanguage')) {
@@ -114,7 +114,7 @@ test('OpenAI, Google, and Ollama format payloads and normalize URLs correctly', 
         }
 
         // Test with trailing slash in baseUrl to verify URL normalization
-        await new OpenAIAdapter().generate({
+        const openai = await new OpenAIAdapter().generate({
             modelId: 'gpt-4o',
             prompt: 'hi',
             config: {id: 'openai', apiKey: 'key', baseUrl: 'https://api.openai.com/v1/'},
@@ -133,8 +133,10 @@ test('OpenAI, Google, and Ollama format payloads and normalize URLs correctly', 
             format,
         })
 
-        expect(calls[0]?.url).toBe('https://api.openai.com/v1/chat/completions')
-        expect(calls[0]?.body.response_format.type).toBe('json_schema')
+        expect(openai.ok).toBe(true)
+        expect(openai.text).toBe('{"value":"openai"}')
+        expect(calls[0]?.url).toBe('https://api.openai.com/v1/responses')
+        expect(calls[0]?.body.text.format.type).toBe('json_schema')
         expect(calls[1]?.url.includes('models/gemini-flash:generateContent')).toBe(true)
         expect(calls[1]?.body.generationConfig.responseMimeType).toBe('application/json')
         expect(calls[2]?.url).toBe('http://localhost:11434/api/chat')
@@ -174,7 +176,7 @@ test('Asker.ask performs bounded corrective retry when validation fails', async 
 
 test('Asker.json carries Ollama context capacity and output budget through schema correction', async () => {
     const originalFetch = globalThis.fetch
-    const requests: Array<{options: {num_ctx?: number; num_predict: number}; messages: Array<{content: string}>}> = []
+    const requests: Array<{options: {num_ctx?: number; num_predict: number; temperature?: number}; messages: Array<{content: string}>}> = []
     globalThis.fetch = (async (_url, init) => {
         requests.push(JSON.parse(String(init?.body)))
         return new Response(JSON.stringify({message: {content: requests.length === 1 ? '{"count":"invalid"}' : '{"count":42}'}}))
