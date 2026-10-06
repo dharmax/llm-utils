@@ -581,7 +581,7 @@ export class LLMActor {
                 const {$schema, additionalProperties, ...rest} = converted.schema as Record<string, unknown>
                 schemaJson = rest
             }
-            return `### Tool: ${t.name}\nDescription: ${t.description}\nParameters JSON Schema:\n${JSON.stringify(schemaJson, null, 2)}`
+            return `### Tool: ${t.name}\nDescription: ${t.description}\nParameters JSON Schema: ${JSON.stringify(schemaJson)}`
         }).join('\n\n')
     }
 
