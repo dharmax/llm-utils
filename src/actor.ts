@@ -499,7 +499,29 @@ export class LLMActor {
         let effectiveGoal = goal
         const resolver = options.contextResolver ?? this.contextResolver
         if (resolver) {
+            if (signal?.aborted) {
+                issues.push({kind: 'abort', message: 'Execution aborted by signal.'})
+                return finish({
+                    ok: false,
+                    finalText: '',
+                    steps,
+                    totalSteps: 0,
+                    haltReason: 'aborted',
+                    error: 'Execution aborted by signal.',
+                })
+            }
             const ctxText = await resolveContext(resolver, {query: goal})
+            if (signal?.aborted) {
+                issues.push({kind: 'abort', message: 'Execution aborted by signal.'})
+                return finish({
+                    ok: false,
+                    finalText: '',
+                    steps,
+                    totalSteps: 0,
+                    haltReason: 'aborted',
+                    error: 'Execution aborted by signal.',
+                })
+            }
             if (ctxText) {
                 effectiveGoal = `## Retrieved Context\n${ctxText}\n\n## Goal\n${goal}`
             }
@@ -586,6 +608,17 @@ export class LLMActor {
                             options.schema,
                             runAskOptions,
                         )
+                        if (signal?.aborted) {
+                            issues.push({kind: 'abort', message: 'Execution aborted by signal.', step: stepResult.record.step})
+                            return finish({
+                                ok: false,
+                                finalText: '',
+                                steps,
+                                totalSteps: steps.length,
+                                haltReason: 'aborted',
+                                error: 'Execution aborted by signal.',
+                            })
+                        }
                         if (repair.ok && repair.data)
                             output = repair.data
                     }
