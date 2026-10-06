@@ -48,6 +48,14 @@ export interface ActorStepRecord {
 
 export type ActorHaltReason = 'completed' | 'max_steps_exceeded' | 'aborted' | 'error'
 
+export interface ActorIssue {
+    kind: 'llm' | 'tool' | 'abort' | 'budget'
+    message: string
+    step?: number
+    source?: string
+    retryable?: boolean
+}
+
 export interface ActorRunResult<T = unknown> {
     ok: boolean
     output?: T
@@ -56,6 +64,7 @@ export interface ActorRunResult<T = unknown> {
     totalSteps: number
     haltReason: ActorHaltReason
     error?: string
+    issues: ActorIssue[]
 }
 
 export interface ActorOptions {
@@ -98,6 +107,7 @@ export interface ActorStepResult {
     isDone: boolean
     error?: string
     aborted?: boolean
+    issue?: ActorIssue
 }
 
 export function createActorDecisionSchema(registeredToolNames: string[] = []): z.ZodType<ActorDecision> {
@@ -307,6 +317,13 @@ export class LLMActor {
                 record: errorRecord,
                 isDone: true,
                 error: errorMsg,
+                issue: {
+                    kind: 'llm',
+                    message: errorMsg,
+                    step: stepNumber,
+                    source: res.failure?.kind,
+                    retryable: res.failure?.retryable,
+                },
             }
         }
 
@@ -437,20 +454,22 @@ export class LLMActor {
     ): Promise<ActorRunResult<T>> {
         const max = options.maxSteps ?? this.maxSteps
         const steps: ActorStepRecord[] = []
+        const issues: ActorIssue[] = []
         const signal = options.signal
         const started = performance.now()
         const parentMetrics = options.metrics ?? options.askOptions?.metrics
         const runMetrics = parentMetrics ? childMetricsContext(parentMetrics) : undefined
         const metricsSink = options.metricsSink ?? options.askOptions?.metricsSink
-        const runAskOptions: AskOptions | undefined = (options.askOptions || runMetrics || metricsSink)
+        const runAskOptions: AskOptions | undefined = (options.askOptions || runMetrics || metricsSink || signal)
             ? {
                 ...options.askOptions,
+                ...(signal ? {signal} : {}),
                 ...(runMetrics ? {metrics: runMetrics} : {}),
                 ...(metricsSink ? {metricsSink} : {}),
             }
             : undefined
 
-        const finish = (result: ActorRunResult<T>): ActorRunResult<T> => {
+        const finish = (result: Omit<ActorRunResult<T>, 'issues'>): ActorRunResult<T> => {
             const toolResults = steps.flatMap(step => step.toolResults)
             emitMetric(metricsSink, {
                 kind: 'actor',
@@ -469,7 +488,7 @@ export class LLMActor {
                 taskClass: runMetrics?.taskClass,
                 tags: runMetrics?.tags,
             })
-            return result
+            return {...result, issues: [...issues]}
         }
         const runLocalTools = options.tools !== undefined
         const tools = runLocalTools
@@ -488,6 +507,7 @@ export class LLMActor {
 
         while (steps.length < max) {
             if (signal?.aborted) {
+                issues.push({kind: 'abort', message: 'Execution aborted by signal.', step: steps.length || undefined})
                 return finish({
                     ok: false,
                     finalText: '',
@@ -508,6 +528,17 @@ export class LLMActor {
                 options.onMissingTool,
             )
             steps.push(stepResult.record)
+            if (stepResult.issue) issues.push(stepResult.issue)
+            for (const toolResult of stepResult.record.toolResults) {
+                if (toolResult.isError) {
+                    issues.push({
+                        kind: 'tool',
+                        message: toolResult.error ?? 'Tool execution failed.',
+                        step: stepResult.record.step,
+                        source: toolResult.toolName,
+                    })
+                }
+            }
 
             const onStep = options.onStep ?? this.onStep
             if (onStep) {
@@ -516,6 +547,18 @@ export class LLMActor {
                 } catch {
                     // Life cycle callback error should not crash the actor loop
                 }
+            }
+
+            if (signal?.aborted) {
+                issues.push({kind: 'abort', message: 'Execution aborted by signal.', step: stepResult.record.step})
+                return finish({
+                    ok: false,
+                    finalText: '',
+                    steps,
+                    totalSteps: steps.length,
+                    haltReason: 'aborted',
+                    error: 'Execution aborted by signal.',
+                })
             }
 
             if (stepResult.error !== undefined) {
@@ -559,13 +602,15 @@ export class LLMActor {
             }
         }
 
+        const budgetError = `Exceeded maximum step budget of ${max} steps without reaching a final answer.`
+        issues.push({kind: 'budget', message: budgetError, step: steps.length})
         return finish({
             ok: false,
             finalText: '',
             steps,
             totalSteps: steps.length,
             haltReason: 'max_steps_exceeded',
-            error: `Exceeded maximum step budget of ${max} steps without reaching a final answer.`,
+            error: budgetError,
         })
     }
 
