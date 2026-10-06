@@ -300,6 +300,92 @@ test('LLMActor.run respects AbortSignal', async () => {
     expect(result.haltReason).toBe('aborted')
 })
 
+test('LLMActor.run propagates cancellation into an in-flight model request', async () => {
+    const completion = new CompletionEngine([]).registerAdapter({
+        id: 'mock',
+        async generate({signal}) {
+            return await new Promise(resolve => {
+                let settled = false
+                const finish = (message: string) => {
+                    if (settled) return
+                    settled = true
+                    resolve({
+                        ok: false,
+                        text: '',
+                        model: {providerId: 'mock', modelId: 'mock-model'},
+                        failure: {kind: 'timeout', message, retryable: true, fatal: false},
+                    })
+                }
+                if (signal?.aborted) return finish('aborted')
+                signal?.addEventListener('abort', () => finish('aborted'), {once: true})
+                setTimeout(() => finish('signal was not propagated'), 1000)
+            })
+        },
+    })
+    const asker = new Asker({
+        providers: {mock: {id: 'mock', available: true}},
+        completion,
+        defaultModel: 'mock/mock-model',
+    })
+    const actor = new LLMActor(asker)
+    const controller = new AbortController()
+    setTimeout(() => controller.abort(), 20)
+
+    const started = performance.now()
+    const result = await actor.run('Wait for cancellation', {signal: controller.signal})
+    const elapsed = performance.now() - started
+
+    expect(elapsed).toBeLessThan(500)
+    expect(result.ok).toBe(false)
+    expect(result.haltReason).toBe('aborted')
+    expect(result.issues.some(issue => issue.kind === 'llm' && issue.source === 'timeout')).toBe(true)
+    expect(result.issues.some(issue => issue.kind === 'abort')).toBe(true)
+})
+
+test('LLMActor.run preserves recovered tool failures as structured issues', async () => {
+    const asker = createMockAsker([
+        {
+            thought: 'Try the primary tool.',
+            action: 'tool_call',
+            toolCalls: [{callId: 'c1', name: 'primary', parameters: {}}],
+        },
+        {
+            thought: 'Use fallback.',
+            action: 'tool_call',
+            toolCalls: [{callId: 'c2', name: 'fallback', parameters: {}}],
+        },
+        {
+            thought: 'Done.',
+            action: 'final_answer',
+            finalAnswer: 'Recovered.',
+        },
+    ])
+    const actor = new LLMActor(asker, {
+        tools: [
+            {
+                name: 'primary',
+                description: 'Primary path',
+                parameters: z.object({}),
+                execute: () => { throw new Error('primary failed') },
+            },
+            {
+                name: 'fallback',
+                description: 'Fallback path',
+                parameters: z.object({}),
+                execute: () => 'ok',
+            },
+        ],
+    })
+
+    const result = await actor.run('Complete with fallback')
+
+    expect(result.ok).toBe(true)
+    expect(result.finalText).toBe('Recovered.')
+    expect(result.issues).toEqual([
+        {kind: 'tool', message: 'primary failed', step: 1, source: 'primary'},
+    ])
+})
+
 test('LLMActor.run parses structured output schema when specified', async () => {
     const ResultSchema = z.object({
         status: z.enum(['healthy', 'unhealthy']),
