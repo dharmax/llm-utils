@@ -18,6 +18,8 @@ export class ToolAbortError extends Error {
 export interface ToolDefinition<TParams = any, TResult = any> {
     name: string
     description: string
+    /** Explicitly read-only observations may be retried, but unchanged evidence must trigger replanning. */
+    readOnly?: boolean
     parameters: ZodType<TParams>
     execute: (params: TParams, context?: unknown) => Promise<TResult> | TResult
 }
@@ -458,6 +460,7 @@ export class LLMActor {
         const max = options.maxSteps ?? this.maxSteps
         const steps: ActorStepRecord[] = []
         const failedUnavailableTools = new Set<string>()
+        const observations = new Map<string, {output: string; repeats: number}>()
         const issues: ActorIssue[] = []
         const signal = options.signal
         const started = performance.now()
@@ -553,6 +556,25 @@ export class LLMActor {
                 runLocalTools,
                 options.onMissingTool,
             )
+            // Successful mutations invalidate prior reads. Errors are repairable, not observations.
+            if (stepResult.record.toolResults.some(result => !result.isError && tools.get(result.toolName)?.readOnly !== true)) observations.clear()
+            let stalled: string | undefined
+            for (const result of stepResult.record.toolResults) {
+                if (result.isError || tools.get(result.toolName)?.readOnly !== true) continue
+                const call = stepResult.record.toolCalls.find(call => call.callId === result.callId)
+                if (!call) continue
+                const key = JSON.stringify([call.toolName, call.parameters], sortedObject)
+                const output = JSON.stringify(result.result, sortedObject)
+                if (output === undefined) continue
+                const previous = observations.get(key)
+                const repeats = previous?.output === output ? previous.repeats + 1 : 0
+                observations.set(key, {output, repeats})
+                if (!repeats) continue
+                result.isError = true
+                result.error = `No new evidence from ${call.toolName} with unchanged arguments. Answer from the observed evidence, request a different missing capability through host recovery, or explain what cannot be established. Do not repeat this observation.`
+                if (repeats > 1) stalled = result.error
+            }
+            if (stalled) {stepResult.error = stalled; stepResult.issue = {kind: 'tool', message: stalled, step: stepResult.record.step, retryable: false}}
             steps.push(stepResult.record)
             if (stepResult.issue) issues.push(stepResult.issue)
             for (const toolResult of stepResult.record.toolResults) {
@@ -696,7 +718,7 @@ ${catalog}
    - Use host-provided recovery when configured; do not invent discovery helper tools.
    If no applicable capability exists, explain the limitation rather than repeating unavailable calls. Ordinary execution errors can be repaired when a registered alternative or corrected input exists.
 5. NEVER put JSON schema definitions, type names, or JSON pointers (like "#/...") in "parameters". Always provide the actual runtime values.
-6. When the goal is accomplished or you have the answer from a tool result, choose action="final_answer" and formulate your response in "finalAnswer". Do not repeatedly request the same successful observation just to obtain more metadata; answer from the observed result. Do NOT invoke notification/messaging tools to tell the user the answer.
+6. Tool discovery supplies candidates, not proof they satisfy the goal. Evaluate the full request against tool descriptions and results; when evidence is insufficient, request a different capability through host recovery or explain the limitation. Do not substitute the answer to a different question. When the goal is accomplished or you have the answer from a tool result, choose action="final_answer" and formulate your response in "finalAnswer". Do not repeatedly request the same successful observation just to obtain more metadata; answer from the observed result. Do NOT invoke notification/messaging tools to tell the user the answer.
 7. Always produce output strictly matching the required JSON format.`
     }
 
@@ -717,7 +739,7 @@ ${catalog}
                         if (!call)
                             continue
                         const res = item.toolResults[i]
-                        const resStr = res ? (res.isError ? `ERROR: ${res.error}` : JSON.stringify(res.result)) : 'pending'
+                        const resStr = res ? (res.isError ? `ERROR: ${res.error}${res.result !== undefined ? `; observed result: ${JSON.stringify(res.result)}` : ''}` : JSON.stringify(res.result)) : 'pending'
                         lines.push(`- ${call.toolName}(${JSON.stringify(call.parameters)}) -> Result: ${resStr}`)
                     }
                 }
@@ -736,4 +758,10 @@ ${catalog}
         }
         return lines.join('\n')
     }
+}
+
+function sortedObject(_key: string, value: unknown): unknown {
+    return value && typeof value === 'object' && !Array.isArray(value)
+        ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)))
+        : value
 }

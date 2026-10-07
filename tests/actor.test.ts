@@ -850,3 +850,55 @@ test('LLMActor advertises bounded missing-tool recovery only when a resolver exi
     expect(systems[0]).not.toContain('bounded semantic recovery')
     expect(systems[1]).toContain('bounded semantic recovery')
 })
+
+test('LLMActor stops unchanged read observations after one replanning opportunity', async () => {
+    const call = {thought: '', action: 'tool_call', toolCalls: [{name: 'read', parameters: {}}]}
+    const actor = new LLMActor(createMockAsker([call]), {maxSteps: 10})
+    let executions = 0
+    const result = await actor.run('Find evidence this reader does not provide', {tools: [{name: 'read', description: 'Read current state', readOnly: true, parameters: z.object({}), execute: () => {executions++; return {id: 'unchanged'}}}]})
+    expect(result.haltReason).toBe('error')
+    expect(result.totalSteps).toBe(3)
+    expect(executions).toBe(3)
+    expect(result.steps[1]!.toolResults[0]!.error).toContain('No new evidence')
+    expect(result.steps[1]!.toolResults[0]!.result).toEqual({id: 'unchanged'})
+})
+
+test('unchanged read evidence can replan to a recovered capability and answer its actual goal', async () => {
+    const read = {thought: '', action: 'tool_call', toolCalls: [{name: 'next', parameters: {}}]}
+    const asker = createMockAsker([read, read,
+        {thought: '', action: 'tool_call', toolCalls: [{name: 'list_candidates', parameters: {}}]},
+        {thought: '', action: 'final_answer', finalAnswer: 'Candidate B has no supporting acceptance evidence; next alone did not establish that.'}])
+    let recovered = 0
+    const result = await new LLMActor(asker).run('Find the least supported candidate', {
+        tools: [{name: 'next', description: 'Choose next', readOnly: true, parameters: z.object({}), execute: () => ({id: 'A'})}],
+        onMissingTool: () => {recovered++; return {name: 'list_candidates', description: 'List all evidence', readOnly: true, parameters: z.object({}), execute: () => [{id: 'A', evidence: true}, {id: 'B', evidence: false}]}}
+    })
+    expect(result.ok).toBe(true); expect(result.totalSteps).toBe(4); expect(recovered).toBe(1)
+    expect(result.steps[1]!.toolResults[0]!.error).toContain('No new evidence')
+    expect(result.steps[2]!.toolResults[0]!.recoveredMissingTool).toBe(true)
+})
+
+for (const changed of ['arguments', 'result', 'mutation'] as const) test(`read progress guard permits ${changed} changes`, async () => {
+    const call = (name = 'read', parameters = {}) => ({thought: '', action: 'tool_call', toolCalls: [{name, parameters}]})
+    const decisions = changed === 'mutation' ? [call(), call('write'), call()] : [call(), call('read', changed === 'arguments' ? {target: 2} : {})]
+    let value = 0
+    const result = await new LLMActor(createMockAsker([...decisions, {thought: '', action: 'final_answer', finalAnswer: 'Proven'}])).run('Observe changes', {tools: [
+        {name: 'read', description: 'Read', readOnly: true, parameters: z.object({target: z.number().optional()}), execute: () => changed === 'result' ? ++value : value},
+        {name: 'write', description: 'Mutate', parameters: z.object({}), execute: () => 'written'},
+    ]})
+    expect(result.ok).toBe(true)
+    expect(result.steps.flatMap(step => step.toolResults).some(result => result.isError)).toBe(false)
+})
+
+test('read progress comparison ignores argument and result object key order', async () => {
+    const call = (parameters: Record<string, number>) => ({thought: '', action: 'tool_call', toolCalls: [{name: 'read', parameters}]})
+    let executions = 0
+    const result = await new LLMActor(createMockAsker([call({a: 1, b: 2}), call({b: 2, a: 1}), call({a: 1, b: 2})])).run('Observe', {tools: [{name: 'read', description: 'Read', readOnly: true, parameters: z.record(z.string(), z.number()), execute: () => ++executions % 2 ? {a: 1, b: 2} : {b: 2, a: 1}}]})
+    expect(result.haltReason).toBe('error'); expect(result.totalSteps).toBe(3)
+})
+
+test('alternating unchanged reads cannot evade the progress guard', async () => {
+    const call = (target: string) => ({thought: '', action: 'tool_call', toolCalls: [{name: 'read', parameters: {target}}]})
+    const result = await new LLMActor(createMockAsker([call('A'), call('B'), call('A'), call('B'), call('A')]), {maxSteps: 10}).run('Compare unchanged evidence', {tools: [{name: 'read', description: 'Read', readOnly: true, parameters: z.object({target: z.string()}), execute: ({target}) => target}]})
+    expect(result.haltReason).toBe('error'); expect(result.totalSteps).toBe(5)
+})
