@@ -22,6 +22,7 @@ test('LLMSession carries actor tool observations into the next actor turn', asyn
                     finalText: 'The smallest folder is .ai.',
                     totalSteps: 2,
                     haltReason: 'completed',
+                    issues: [],
                     steps: [
                         {
                             step: 1,
@@ -56,6 +57,7 @@ test('LLMSession carries actor tool observations into the next actor turn', asyn
                 finalText: 'No process is using it.',
                 totalSteps: 1,
                 haltReason: 'completed',
+                    issues: [],
                 steps: [{
                     step: 1,
                     thought: 'follow-up',

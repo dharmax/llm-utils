@@ -28,6 +28,54 @@ function createMockAsker(responses: any[]) {
     })
 }
 
+test('LLMActor stops a repeated unavailable capability after retaining both failed observations', async () => {
+    const asker = createMockAsker([
+        {thought: '', action: 'tool_call', toolCalls: [{callId: '1', name: 'request_tool', parameters: {toolName: 'coverage'}}]},
+        {thought: '', action: 'tool_call', toolCalls: [{callId: '2', name: 'request_tool', parameters: {toolName: 'coverage'}}]},
+        {thought: '', action: 'final_answer', finalAnswer: 'Should not reach a fabricated success'},
+    ])
+    const actor = new LLMActor(asker, {maxSteps: 10})
+    const result = await actor.run('Inspect coverage', {tools: [], onMissingTool: () => undefined})
+    expect(result.ok).toBe(false)
+    expect(result.haltReason).toBe('error')
+    expect(result.totalSteps).toBe(2)
+    expect(result.error).toContain('Repeated unavailable tool calls: request_tool')
+    expect(result.steps.every(step => step.toolResults[0]?.unavailable)).toBe(true)
+    expect(result.issues.some(issue => issue.retryable === false)).toBe(true)
+})
+
+test('LLMActor still repairs an ordinary failure of an available tool', async () => {
+    const asker = createMockAsker([
+        {thought: '', action: 'tool_call', toolCalls: [{callId: '1', name: 'available', parameters: {}}]},
+        {thought: '', action: 'tool_call', toolCalls: [{callId: '2', name: 'available', parameters: {}}]},
+        {thought: '', action: 'final_answer', finalAnswer: 'Recovered successfully'},
+    ])
+    let executions = 0
+    const actor = new LLMActor(asker)
+    const result = await actor.run('Repair a transient failure', {tools: [{name: 'available', description: 'Fixture', parameters: z.object({}), execute: () => {
+        if (++executions === 1) throw Error('Transient execution error')
+        return 'success'
+    }}]})
+    expect(result.ok).toBe(true)
+    expect(executions).toBe(2)
+    expect(result.steps[0]!.toolResults[0]!.unavailable).toBeUndefined()
+})
+
+test('LLMActor allows a missing capability that successfully recovers on its next attempt', async () => {
+    const asker = createMockAsker([
+        {thought: '', action: 'tool_call', toolCalls: [{callId: '1', name: 'alias', parameters: {}}]},
+        {thought: '', action: 'tool_call', toolCalls: [{callId: '2', name: 'alias', parameters: {}}]},
+        {thought: '', action: 'final_answer', finalAnswer: 'Recovered successfully'},
+    ])
+    let attempts = 0
+    const actor = new LLMActor(asker)
+    const result = await actor.run('Recover the missing capability', {tools: [], onMissingTool: () => ++attempts === 1 ? undefined : {
+        name: 'canonical', description: 'Recovered fixture', parameters: z.object({}), execute: () => 'success',
+    }})
+    expect(result.ok).toBe(true)
+    expect(result.steps[1]!.toolResults[0]!.recoveredMissingTool).toBe(true)
+})
+
 test('LLMActor registers, retrieves, and unregisters tools', () => {
     const asker = createMockAsker([])
     const actor = new LLMActor(asker)

@@ -49,7 +49,7 @@ for (const haltReason of ['completed','error','aborted'] as const) test('session
     const goals: string[] = []
     const actor = {async run(goal:string):Promise<ActorRunResult> {
         goals.push(goal)
-        return {ok:haltReason==='completed',haltReason,totalSteps:1,finalText:'Answer',error:haltReason==='completed'?undefined:'Aborted by user.',steps:[{
+        return {ok:haltReason==='completed',haltReason,issues:[],totalSteps:1,finalText:'Answer',error:haltReason==='completed'?undefined:'Aborted by user.',steps:[{
             step:1,thought:'PRIVATE REASONING',action:'tool_call',toolCalls:[{callId:'c',toolName:'shell',parameters:{command:'ssh lotus nvidia-smi'}}],
             toolResults:[{callId:'c',toolName:'shell',isError:haltReason!=='completed',result:'GPU load 12%',error:'Aborted by user.'}],
         }]}

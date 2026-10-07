@@ -35,6 +35,8 @@ export interface ToolExecutionResult {
     error?: string
     isError: boolean
     recoveredMissingTool?: boolean
+    /** No registered or recovered capability exists for this invocation. */
+    unavailable?: boolean
 }
 
 export interface ActorStepRecord {
@@ -390,6 +392,7 @@ export class LLMActor {
                     callId: call.callId,
                     toolName: call.toolName,
                     isError: true,
+                    unavailable: true,
                     error: runLocalTools
                         ? `Tool "${call.toolName}" is not available for this run. Available tools: ${[...tools.keys()].join(', ')}`
                         : `Tool "${call.toolName}" is not registered. Available tools: ${[...tools.keys()].join(', ')}`,
@@ -454,6 +457,7 @@ export class LLMActor {
     ): Promise<ActorRunResult<T>> {
         const max = options.maxSteps ?? this.maxSteps
         const steps: ActorStepRecord[] = []
+        const failedUnavailableTools = new Set<string>()
         const issues: ActorIssue[] = []
         const signal = options.signal
         const started = performance.now()
@@ -594,6 +598,15 @@ export class LLMActor {
                 })
             }
 
+            const unavailable = new Set(stepResult.record.toolResults.filter(result => result.isError && result.unavailable).map(result => result.toolName))
+            const repeated = [...unavailable].filter(name => failedUnavailableTools.has(name))
+            if (repeated.length) {
+                const error = `Repeated unavailable tool calls: ${repeated.join(', ')}. No applicable capability was recovered; stopping instead of repeating failed discovery.`
+                issues.push({kind: 'tool', message: error, step: stepResult.record.step, retryable: false})
+                return finish({ok: false, finalText: '', steps, totalSteps: steps.length, haltReason: 'error', error})
+            }
+            for (const name of unavailable) failedUnavailableTools.add(name)
+
             if (stepResult.isDone) {
                 const finalText = stepResult.record.finalAnswer ?? ''
                 let output: T | undefined
@@ -666,7 +679,7 @@ export class LLMActor {
     private buildSystemPrompt(catalog: string, canRecoverMissingTool: boolean): string {
         const userCustom = this.system ? `${this.system}\n\n` : ''
         const toolRule = canRecoverMissingTool
-            ? 'Use the explicitly declared tools whenever possible. If the goal clearly requires a capability that is absent, you may request that one missing capability by a concise functional name; the runtime will attempt bounded semantic recovery.'
+            ? 'Use the explicitly declared tools whenever possible. If the goal clearly requires a capability that is absent, you may request that one missing capability by a concise functional name; the runtime will attempt bounded semantic recovery. Recovery is handled by the host; do not invent discovery or request-tool helper calls.'
             : 'Only invoke tools explicitly declared in Available Tools above. Never invent or guess tool names.'
         return `${userCustom}You are an autonomous acting agent equipped with tools to accomplish the user's goal.
 
@@ -680,10 +693,10 @@ ${catalog}
 4. A tool error or failure is an observation to reason from, NOT proof that the goal is impossible. When a tool fails or reports invalid arguments:
    - Repair invalid parameters or inputs;
    - Choose an alternative registered tool or capability;
-   - Or trigger discovery if available.
-   Never surrender or claim inability merely because an initial tool call failed or encountered an error while alternative tools or approaches remain.
+   - Use host-provided recovery when configured; do not invent discovery helper tools.
+   If no applicable capability exists, explain the limitation rather than repeating unavailable calls. Ordinary execution errors can be repaired when a registered alternative or corrected input exists.
 5. NEVER put JSON schema definitions, type names, or JSON pointers (like "#/...") in "parameters". Always provide the actual runtime values.
-6. When the goal is accomplished or you have the answer, choose action="final_answer" and formulate your response in "finalAnswer". Do NOT invoke notification/messaging tools to tell the user the answer.
+6. When the goal is accomplished or you have the answer from a tool result, choose action="final_answer" and formulate your response in "finalAnswer". Do not repeatedly request the same successful observation just to obtain more metadata; answer from the observed result. Do NOT invoke notification/messaging tools to tell the user the answer.
 7. Always produce output strictly matching the required JSON format.`
     }
 
@@ -717,7 +730,7 @@ ${catalog}
         lines.push(`\n## Current Turn: Step ${currentStep}`)
         if (lastStepHadError) {
             lines.push('⚠️ RECOVERY / REPLANNING TURN: The previous step encountered tool errors or invalid inputs.')
-            lines.push('Do NOT conclude the goal is impossible. Re-evaluate available registered tools, repair arguments, choose an alternative tool, or use discovery to achieve the goal.')
+            lines.push('Re-evaluate available registered tools, repair arguments or choose an applicable alternative. Do not repeat an unavailable tool or invent a discovery helper. If no applicable capability exists, explain that limitation.')
         } else {
             lines.push('Analyze the goal and any prior observations, then determine the next toolCalls or finalAnswer.')
         }
