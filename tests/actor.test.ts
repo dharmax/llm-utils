@@ -3,6 +3,7 @@ import {
     Asker,
     CompletionEngine,
     LLMActor,
+    createActorDecisionSchema,
     z,
 } from '../src/index.ts'
 
@@ -901,4 +902,31 @@ test('alternating unchanged reads cannot evade the progress guard', async () => 
     const call = (target: string) => ({thought: '', action: 'tool_call', toolCalls: [{name: 'read', parameters: {target}}]})
     const result = await new LLMActor(createMockAsker([call('A'), call('B'), call('A'), call('B'), call('A')]), {maxSteps: 10}).run('Compare unchanged evidence', {tools: [{name: 'read', description: 'Read', readOnly: true, parameters: z.object({target: z.string()}), execute: ({target}) => target}]})
     expect(result.haltReason).toBe('error'); expect(result.totalSteps).toBe(5)
+})
+
+for (const names of [[], ['available']]) test(`rejects missing or blank final answers with tool surface ${names.join(',')}`, async () => {
+    const schema = createActorDecisionSchema(names)
+    for (const finalAnswer of [undefined, '', '  ']) expect(schema.safeParse({thought: '', action: 'final_answer', finalAnswer}).success).toBe(false)
+    expect(schema.safeParse({thought: '', action: 'final_answer', finalAnswer: 'Observed answer'}).success).toBe(true)
+    const result = await new LLMActor(createMockAsker([{thought: '', action: 'final_answer'}])).run('Answer the question')
+    expect(result.ok).toBe(false); expect(result.haltReason).toBe('error'); expect(result.finalText).toBe('')
+})
+
+test('explicit discovery adds exact schemas to the next turn without leaking capabilities across runs', async () => {
+    const asker = createMockAsker([
+        {thought: '', action: 'tool_call', toolCalls: [{name: 'discover_tools', parameters: {request: 'Read the missing graph evidence'}}]},
+        {thought: '', action: 'tool_call', toolCalls: [{name: 'read_graph', parameters: {target: 'TICKET'}}]},
+        {thought: '', action: 'final_answer', finalAnswer: 'Observed EPIC'},
+        {thought: '', action: 'final_answer', finalAnswer: 'Another run'},
+    ])
+    const actor = new LLMActor(asker)
+    let request = '', executed = 0
+    const result = await actor.run('Inspect graph evidence', {onDiscoverTools: async query => {
+        request = query
+        return [{name: 'read_graph', description: 'Inspect graph', readOnly: true, parameters: z.object({target: z.string()}), execute: ({target}) => {executed++; expect(target).toBe('TICKET'); return 'EPIC'}}]
+    }})
+    expect(result.ok).toBe(true); expect(result.totalSteps).toBe(3)
+    expect(request).toBe('Read the missing graph evidence'); expect(executed).toBe(1)
+    expect(result.steps[0]!.toolResults[0]!.result).toEqual([{name: 'read_graph', description: 'Inspect graph'}])
+    expect(actor.getTools().map(tool => tool.name)).not.toContain('read_graph'); expect(actor.getTools().map(tool => tool.name)).not.toContain('discover_tools')
 })

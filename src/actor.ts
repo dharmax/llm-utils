@@ -102,6 +102,8 @@ export interface ActorRunOptions<T = unknown> {
         parameters: Record<string, unknown>,
         context?: unknown
     ) => Promise<ToolExecutionResult | ToolDefinition | undefined> | ToolExecutionResult | ToolDefinition | undefined
+    /** Let the model discover more registered capabilities while preserving this run's exact tool surface. */
+    onDiscoverTools?: (request: string, context?: unknown) => Promise<readonly ToolDefinition[]>
     metrics?: MetricsContext
     metricsSink?: MetricsSink
 }
@@ -129,11 +131,9 @@ export function createActorDecisionSchema(registeredToolNames: string[] = []): z
         finalAnswer: z.string().optional().describe('Final textual answer or summary to present when action is final_answer'),
     })
 
-    if (registeredToolNames.length === 0)
-        return base
-
     return base.superRefine((data, ctx) => {
-        if (data.action === 'tool_call') {
+        if (data.action === 'final_answer' && !data.finalAnswer?.trim()) ctx.addIssue({code: z.ZodIssueCode.custom, message: 'A final answer must contain a nonempty response to the user.', path: ['finalAnswer']})
+        if (data.action === 'tool_call' && registeredToolNames.length > 0) {
             for (let i = 0; i < (data.toolCalls?.length ?? 0); i += 1) {
                 const call = data.toolCalls?.[i]
                 if (call && !registeredToolNames.includes(call.name)) {
@@ -497,10 +497,22 @@ export class LLMActor {
             })
             return {...result, issues: [...issues]}
         }
-        const runLocalTools = options.tools !== undefined
+        const runLocalTools = options.tools !== undefined || options.onDiscoverTools !== undefined
         const tools = runLocalTools
-            ? new Map(options.tools!.map(tool => [tool.name, tool] as const))
+            ? new Map((options.tools ?? [...this.tools.values()]).map(tool => [tool.name, tool] as const))
             : this.tools
+
+        if (options.onDiscoverTools) tools.set('discover_tools', {
+            name: 'discover_tools',
+            description: 'Discover a missing capability by describing the specific evidence or action needed next. The initial tools are not the full capability set. Discovered tools become available with their exact schemas on the next turn. Complete all parts of the request by gathering the missing evidence instead of repeating insufficient observations.',
+            readOnly: true,
+            parameters: z.object({request: z.string().trim().min(1)}),
+            execute: async ({request}: {request: string}) => {
+                const discovered = await options.onDiscoverTools!(request, options.context)
+                for (const tool of discovered) tools.set(tool.name, tool)
+                return discovered.map(tool => ({name: tool.name, description: tool.description}))
+            },
+        })
 
         // Auto-inject RAG context if contextResolver is provided
         let effectiveGoal = goal
@@ -718,7 +730,7 @@ ${catalog}
    - Use host-provided recovery when configured; do not invent discovery helper tools.
    If no applicable capability exists, explain the limitation rather than repeating unavailable calls. Ordinary execution errors can be repaired when a registered alternative or corrected input exists.
 5. NEVER put JSON schema definitions, type names, or JSON pointers (like "#/...") in "parameters". Always provide the actual runtime values.
-6. Tool discovery supplies candidates, not proof they satisfy the goal. Evaluate the full request against tool descriptions and results; when evidence is insufficient, request a different capability through host recovery or explain the limitation. Do not substitute the answer to a different question. When the goal is accomplished or you have the answer from a tool result, choose action="final_answer" and formulate your response in "finalAnswer". Do not repeatedly request the same successful observation just to obtain more metadata; answer from the observed result. Do NOT invoke notification/messaging tools to tell the user the answer.
+6. Address every requested part before finishing. Preserve observed facts across queries: an empty result for one filter does not mean all data is empty. Tool discovery supplies candidates, not proof they satisfy the goal. Evaluate the full request against tool descriptions and results; when evidence is insufficient, request a different capability through host recovery or explain the limitation. Do not substitute the answer to a different question. When the goal is accomplished or you have the answer from a tool result, choose action="final_answer" and formulate your response in "finalAnswer". Do not repeatedly request the same successful observation just to obtain more metadata; answer from the observed result. Do NOT invoke notification/messaging tools to tell the user the answer.
 7. Always produce output strictly matching the required JSON format.`
     }
 
