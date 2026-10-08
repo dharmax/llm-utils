@@ -9,6 +9,8 @@ export type CustomRouterFn = (task: string, availableProviders: string[]) => Mod
 
 export interface ModelRouterOptions {
     routes?: TaskRouteMap
+    /** Ordered concrete fallback targets for a configured task. */
+    fallbacks?: Record<string, Array<string | ModelTarget>>
     router?: CustomRouterFn
     preferLocal?: boolean
     defaultModel?: string | ModelTarget
@@ -37,6 +39,7 @@ export class ModelRouter {
     private readonly configuredDefault: boolean
     private readonly advicePath?: string | false
     private readonly providers?: Record<string, ProviderConfig>
+    private readonly fallbacks: NonNullable<ModelRouterOptions['fallbacks']>
 
     constructor(options: ModelRouterOptions = {}) {
         this.routes = {...DEFAULT_TASK_ROUTES, ...options.routes}
@@ -44,6 +47,7 @@ export class ModelRouter {
         this.configuredDefault = options.defaultModel !== undefined || options.routes?.default !== undefined
         this.advicePath = options.advicePath
         this.providers = options.providers
+        this.fallbacks = options.fallbacks ?? {}
         this.customRouter = options.router
         this.preferLocal = Boolean(options.preferLocal)
         this.defaultModel = parseModelTarget(
@@ -91,6 +95,18 @@ export class ModelRouter {
         // 3. Explicit task routes outrank preferences.
         const configured = this.explicitRoutes[targetStr || 'default']
             ?? (!targetStr && this.configuredDefault ? this.defaultModel : undefined)
+        const fallbacks = this.fallbacks[targetStr || 'default']
+        if (fallbacks) {
+            const candidates = [configured, ...fallbacks].filter((value): value is string | ModelTarget => value !== undefined).map(parseModelTarget)
+            for (const candidate of candidates) {
+                const provider = providers?.[candidate.providerId]
+                if (availableProviders.includes(candidate.providerId) && candidate.modelId &&
+                    (!provider?.models?.length || provider.models.some(model => model.id === candidate.modelId))) return candidate
+            }
+            // Return a known target, never invent a gateway model. Asker rejects
+            // an unavailable target without transporting the request.
+            return candidates[0] ?? this.defaultModel
+        }
         if (configured) {
             const mapped = configured
             const parsed = typeof mapped === 'string' ? parseModelTarget(mapped) : mapped
@@ -160,12 +176,6 @@ export class ModelRouter {
         for (const candidate of priorities) {
             if (availableProviders.includes(candidate.providerId))
                 return candidate
-        }
-
-        // If any provider is available at all, return the first one
-        if (availableProviders.length > 0) {
-            const first = availableProviders[0]!
-            return {providerId: first, modelId: 'default'}
         }
 
         return this.defaultModel

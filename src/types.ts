@@ -130,6 +130,8 @@ export interface AskOptions<T = unknown> {
     contextWindow?: number
     providerOptions?: Record<string, unknown>
     preferLocal?: boolean
+    /** Hard provider eligibility constraint; unlike preferLocal this cannot be bypassed. */
+    allowedProviders?: string[]
     signal?: AbortSignal
     timeoutMs?: number
     maxRetries?: number

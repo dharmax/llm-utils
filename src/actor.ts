@@ -6,6 +6,14 @@ import {parseStructuredJsonResult, zodToJsonSchema} from './structured-json.ts'
 import type {AskOptions} from './types.ts'
 import {childMetricsContext, emitMetric, type MetricsContext, type MetricsSink} from './metrics.ts'
 
+/** Recoverable tool failure with its structured observation preserved for replanning. */
+export class ToolExecutionError extends Error {
+    constructor(message: string, public readonly result?: unknown) {
+        super(message)
+        this.name = 'ToolExecutionError'
+    }
+}
+
 /** Explicit user refusal/cancellation. Ordinary execution failures throw Error. */
 export class ToolAbortError extends Error {
     constructor(message: string) {
@@ -20,6 +28,8 @@ export interface ToolDefinition<TParams = any, TResult = any> {
     description: string
     /** Explicitly read-only observations may be retried, but unchanged evidence must trigger replanning. */
     readOnly?: boolean
+    /** Host-verified effects for mixed-purpose tools; never supplied by the model. */
+    isReadOnlyResult?: (result: TResult) => boolean
     parameters: ZodType<TParams>
     execute: (params: TParams, context?: unknown) => Promise<TResult> | TResult
 }
@@ -118,7 +128,7 @@ export interface ActorStepResult {
 
 export function createActorDecisionSchema(registeredToolNames: string[] = []): z.ZodType<ActorDecision> {
     const base = z.object({
-        thought: z.string().describe('Reasoning on the current situation and required action'),
+        thought: z.string().describe('Establish the whole requested outcome and constraints, choose a method from general knowledge, and identify the concrete evidence/action needed next. Distinguish observed current-state facts from hypotheses.'),
         action: z.enum(['tool_call', 'final_answer']).describe('Choose tool_call to execute tools, or final_answer if goal is achieved'),
         toolCalls: z.array(z.object({
             callId: z.string().optional().describe('Unique identifier for this call (e.g. call_1)'),
@@ -128,7 +138,7 @@ export function createActorDecisionSchema(registeredToolNames: string[] = []): z
                 : z.string().describe('Name of the tool to invoke'),
             parameters: z.record(z.string(), z.unknown()).describe('Tool arguments as key-value pairs'),
         })).optional().default([]),
-        finalAnswer: z.string().optional().describe('Final textual answer or summary to present when action is final_answer'),
+        finalAnswer: z.string().optional().describe('Grounded response addressing every requested part, respecting observed constraints and identifying concrete unresolved evidence or blockers when necessary'),
     })
 
     return base.superRefine((data, ctx) => {
@@ -432,6 +442,7 @@ export class LLMActor {
                     toolName: call.toolName,
                     isError: true,
                     error: err instanceof Error ? err.message : String(err),
+                    ...(err instanceof ToolExecutionError && err.result !== undefined ? {result: err.result} : {}),
                 })
                 if (err instanceof ToolAbortError) { abortError = err.message; break }
             }
@@ -461,6 +472,11 @@ export class LLMActor {
         const steps: ActorStepRecord[] = []
         const failedUnavailableTools = new Set<string>()
         const observations = new Map<string, {output: string; repeats: number}>()
+        const isReadOnlyResult = (result: ToolExecutionResult, tools: ReadonlyMap<string, ToolDefinition>): boolean => {
+            const tool = tools.get(result.toolName)
+            try { return tool?.readOnly === true || tool?.isReadOnlyResult?.(result.result) === true }
+            catch { return false }
+        }
         const issues: ActorIssue[] = []
         const signal = options.signal
         const started = performance.now()
@@ -504,7 +520,7 @@ export class LLMActor {
 
         if (options.onDiscoverTools) tools.set('discover_tools', {
             name: 'discover_tools',
-            description: 'Discover a missing capability by describing the specific evidence or action needed next. The initial tools are not the full capability set. Discovered tools become available with their exact schemas on the next turn. Complete all parts of the request by gathering the missing evidence instead of repeating insufficient observations.',
+            description: 'Discover a convenient specialization for the next concrete input or operation your method needs. You own the methodology and reasoning for the overall goal. Discovered tools become available with their exact schemas on the next turn. If discovery is absent, fails or finds no match, compose the current primitives to obtain evidence, execute operations or create an ephemeral helper.',
             readOnly: true,
             parameters: z.object({request: z.string().trim().min(1)}),
             execute: async ({request}: {request: string}) => {
@@ -568,15 +584,16 @@ export class LLMActor {
                 runLocalTools,
                 options.onMissingTool,
             )
-            // Successful mutations invalidate prior reads. Errors are repairable, not observations.
-            if (stepResult.record.toolResults.some(result => !result.isError && tools.get(result.toolName)?.readOnly !== true)) observations.clear()
+            // Successful mutations invalidate prior reads. Failed operations are
+            // observations too when the host proves their effects were read-only.
+            if (stepResult.record.toolResults.some(result => !result.isError && !isReadOnlyResult(result, tools))) observations.clear()
             let stalled: string | undefined
             for (const result of stepResult.record.toolResults) {
-                if (result.isError || tools.get(result.toolName)?.readOnly !== true) continue
+                if (!isReadOnlyResult(result, tools)) continue
                 const call = stepResult.record.toolCalls.find(call => call.callId === result.callId)
                 if (!call) continue
                 const key = JSON.stringify([call.toolName, call.parameters], sortedObject)
-                const output = JSON.stringify(result.result, sortedObject)
+                const output = JSON.stringify({result: result.result, error: result.error, isError: result.isError}, sortedObject)
                 if (output === undefined) continue
                 const previous = observations.get(key)
                 const repeats = previous?.output === output ? previous.repeats + 1 : 0
@@ -653,7 +670,7 @@ export class LLMActor {
                         const repair = await this.asker.json(
                             `Extract and format the required structured JSON based on the goal and observations.\n\nGoal: ${effectiveGoal}\n\nObservations/Answer:\n${finalText}`,
                             options.schema,
-                            runAskOptions,
+                            {...this.defaultAskOptions, ...runAskOptions},
                         )
                         if (signal?.aborted) {
                             issues.push({kind: 'abort', message: 'Execution aborted by signal.', step: stepResult.record.step})
@@ -666,8 +683,13 @@ export class LLMActor {
                                 error: 'Execution aborted by signal.',
                             })
                         }
-                        if (repair.ok && repair.data)
+                        if (repair.ok) {
                             output = repair.data
+                        } else {
+                            const error = repair.failure?.message ?? 'Final answer does not satisfy the requested output schema.'
+                            issues.push({kind: 'llm', message: error, step: stepResult.record.step, retryable: false})
+                            return finish({ok: false, finalText, steps, totalSteps: steps.length, haltReason: 'error', error})
+                        }
                     }
                 }
 
@@ -721,17 +743,20 @@ export class LLMActor {
 ${catalog}
 
 ## Operational Rules
-1. Reason carefully in the "thought" field before taking action.
+1. In the "thought" field, establish the requested outcome, constraints and evidence needed. Choose a method using general knowledge before selecting tools. Keep every requested part as an obligation until supported by observations; tools are means for pursuing the goal.
 2. To gather info or modify state, set action="tool_call" and specify toolCalls with concrete runtime parameter values (e.g. { "callId": "1", "name": "tool_name", "parameters": { "paramName": "actual_value" } }).
 3. ${toolRule}
 4. A tool error or failure is an observation to reason from, NOT proof that the goal is impossible. When a tool fails or reports invalid arguments:
    - Repair invalid parameters or inputs;
    - Choose an alternative registered tool or capability;
    - Use host-provided recovery when configured; do not invent discovery helper tools.
-   If no applicable capability exists, explain the limitation rather than repeating unavailable calls. Ordinary execution errors can be repaired when a registered alternative or corrected input exists.
+   When no direct specialist fits, compose available primitives to obtain evidence, execute operations or create a temporary helper. Inspect the actual inputs after failures and replan. Declare a blocker only when the concrete required action/evidence remains inaccessible, unsafe, unauthorized or requires a user decision after available routes are exhausted.
 5. NEVER put JSON schema definitions, type names, or JSON pointers (like "#/...") in "parameters". Always provide the actual runtime values.
-6. Address every requested part before finishing. Preserve observed facts across queries: an empty result for one filter does not mean all data is empty. Tool discovery supplies candidates, not proof they satisfy the goal. Evaluate the full request against tool descriptions and results; when evidence is insufficient, request a different capability through host recovery or explain the limitation. Do not substitute the answer to a different question. When the goal is accomplished or you have the answer from a tool result, choose action="final_answer" and formulate your response in "finalAnswer". Do not repeatedly request the same successful observation just to obtain more metadata; answer from the observed result. Do NOT invoke notification/messaging tools to tell the user the answer.
-7. Always produce output strictly matching the required JSON format.`
+6. Address every requested part before finishing. Preserve observed facts across queries: an empty result for one filter does not mean all data is empty. Tool discovery supplies candidates, not proof they satisfy the goal. Evaluate the full request against tool descriptions and results; when evidence is insufficient, discover a specialization or compose available primitives to gather it. General knowledge may choose a method; claims about current state must come from observations. Do not substitute the answer to a different question. Choose action="final_answer" only after observed evidence supports the whole requested outcome, and formulate your response in "finalAnswer". One unrelated or incomplete result does not satisfy the goal. Do not infer relationships between datasets without observing their contract. Before asserting absence or a blocker, inspect remaining plausible sources already observed; a directory listing is not their contents. Do not repeatedly request the same successful observation just to obtain more metadata; answer from the observed result. Do NOT invoke notification/messaging tools to tell the user the answer.
+7. Return a decision object, not a schema definition. Its action must be exactly "tool_call" or "final_answer".
+   Tool decision shape: {"thought":"your reasoning","action":"tool_call","toolCalls":[{"name":"an exact declared tool name","parameters":{"argument":"actual value"}}]}
+   Final decision shape: {"thought":"your reasoning","action":"final_answer","finalAnswer":"the grounded answer to the whole goal"}
+   Use the actual tool schema for parameters; the shapes above illustrate the decision envelope only.`
     }
 
     private buildTurnPrompt(goal: string, history: ActorStepRecord[], currentStep: number): string {
@@ -764,9 +789,9 @@ ${catalog}
         lines.push(`\n## Current Turn: Step ${currentStep}`)
         if (lastStepHadError) {
             lines.push('⚠️ RECOVERY / REPLANNING TURN: The previous step encountered tool errors or invalid inputs.')
-            lines.push('Re-evaluate available registered tools, repair arguments or choose an applicable alternative. Do not repeat an unavailable tool or invent a discovery helper. If no applicable capability exists, explain that limitation.')
+            lines.push('Re-evaluate the goal and observed inputs. Repair arguments, choose an available alternative, or compose available primitives to gather evidence and construct an ephemeral helper. Missing specialization alone is not a blocker. Do not repeat an unavailable tool or invent helper tool names.')
         } else {
-            lines.push('Analyze the goal and any prior observations, then determine the next toolCalls or finalAnswer.')
+            lines.push('Compare observations against the whole goal. Identify any unsupported obligations and select the next action that resolves them. Only finish when the requested outcome is grounded; irrelevant data is a reason to inspect another plausible source, not reinterpret the request.')
         }
         return lines.join('\n')
     }

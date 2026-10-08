@@ -108,3 +108,13 @@ describe('provider output budgets and finish reasons', () => {
     })
 
 })
+
+it('classifies gateway HTTP402 as provider-unavailable payment failure', async () => {
+    const {OpenAIAdapter}=await import('../src/adapters.ts')
+    globalThis.fetch=(async()=>Response.json({error:{message:'Insufficient credits',code:402}},{status:402})) as typeof fetch
+    const result=await new OpenAIAdapter('openrouter').generate({modelId:'openai/gpt-4o-mini',prompt:'goal',config:{id:'openrouter',apiKey:'test',baseUrl:'https://gateway.test/v1'}})
+    expect(result.failure?.kind).toBe('quota')
+    expect(result.failure?.status).toBe(402)
+    expect(result.failure?.fatal).toBe(true)
+    expect(result.failure?.retryable).toBe(false)
+})

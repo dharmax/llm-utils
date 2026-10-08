@@ -391,6 +391,9 @@ function parseHttpFailure(status: number, statusText: string, raw: unknown): Llm
     if (status === 401 || status === 403)
         return {kind: 'authentication', message, status, code, retryable: false, fatal: true, raw}
 
+    if (status === 402)
+        return {kind: 'quota', message, status, code, retryable: false, fatal: true, raw}
+
     if (status === 429) {
         const isQuota = code === 'insufficient_quota' || /(?:quota|billing|credit)/i.test(message)
         return {

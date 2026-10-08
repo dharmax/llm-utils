@@ -145,6 +145,14 @@ When local preference is active, remote persisted advice is skipped; explicit mo
 Explicit configured defaults still govern calls without a task. Normal routing
 does no research. `Asker` checks Ollama tags before using local advice, skips
 disabled/unavailable providers and known inaccessible models, and never pulls.
+For automatically routed requests, fatal or retryable provider failures cause
+Asker to reroute the unchanged request among the remaining enabled providers.
+Fatal failures open the existing instance circuit; retryable failures exclude
+that provider only for the current request. Each attempt emits its own metric.
+Explicit `model` selections and
+per-request `providerConfig` overrides stay pinned; cancellation stops failover.
+Nonfatal, nonretryable failures stop. `preferLocal` remains a routing
+preference, not a restriction to local providers.
 For synchronous `ModelRouter.resolve(task, availableProviders?, preferLocal?, providers?)`,
 supply current provider configs/model lists via the fourth argument or constructor
 `providers`; local advice is skipped when installation is unknown. Availability

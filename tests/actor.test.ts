@@ -3,6 +3,7 @@ import {
     Asker,
     CompletionEngine,
     LLMActor,
+    ToolExecutionError,
     createActorDecisionSchema,
     z,
 } from '../src/index.ts'
@@ -28,6 +29,32 @@ function createMockAsker(responses: any[]) {
         defaultModel: 'mock/mock-model',
     })
 }
+
+test('progress guard uses enforced per-execution observation effects on a general tool', async () => {
+    const call = {thought: '', action: 'tool_call', toolCalls: [{name: 'command', parameters: {}}]}
+    const result = await new LLMActor(createMockAsker([call, call, call]), {maxSteps: 10}).run('Inspect evidence', {
+        tools: [{name: 'command', description: 'General execution', parameters: z.object({}),
+            isReadOnlyResult: (result: {observationOnly: boolean}) => result.observationOnly,
+            execute: () => ({observationOnly: true, stdout: 'same observed data'})}],
+    })
+    expect(result.ok).toBe(false)
+    expect(result.haltReason).toBe('error')
+    expect(result.totalSteps).toBe(3)
+    expect(result.steps[1]!.toolResults[0]!.error).toContain('No new evidence')
+})
+
+test('per-execution progress guard permits identical results from repeated mutations', async () => {
+    const call = {thought: '', action: 'tool_call', toolCalls: [{name: 'command', parameters: {}}]}
+    let changes = 0
+    const result = await new LLMActor(createMockAsker([call, call, call, {thought: '', action: 'final_answer', finalAnswer: 'Three mutations completed'}])).run('Repeat authorized mutation three times', {
+        tools: [{name: 'command', description: 'General execution', parameters: z.object({}),
+            isReadOnlyResult: (result: {observationOnly: boolean}) => result.observationOnly,
+            execute: () => {changes++; return {observationOnly: false, stdout: 'same output'}}}],
+    })
+    expect(result.ok).toBe(true)
+    expect(changes).toBe(3)
+    expect(result.steps.flatMap(step => step.toolResults).some(r => r.isError)).toBe(false)
+})
 
 test('LLMActor stops a repeated unavailable capability after retaining both failed observations', async () => {
     const asker = createMockAsker([
@@ -929,4 +956,108 @@ test('explicit discovery adds exact schemas to the next turn without leaking cap
     expect(request).toBe('Read the missing graph evidence'); expect(executed).toBe(1)
     expect(result.steps[0]!.toolResults[0]!.result).toEqual([{name: 'read_graph', description: 'Inspect graph'}])
     expect(actor.getTools().map(tool => tool.name)).not.toContain('read_graph'); expect(actor.getTools().map(tool => tool.name)).not.toContain('discover_tools')
+})
+
+test('failed specialization replans through available universal primitives instead of treating a missing specialist as a blocker', async () => {
+    const systems: string[] = [], prompts: string[] = []
+    let calls = 0
+    const asker = {json: async (prompt: string, _schema: unknown, options: {system?: string}) => {
+        systems.push(options.system ?? ''); prompts.push(prompt)
+        return {ok: true, data: ++calls === 1
+            ? {thought: '', action: 'tool_call', toolCalls: [{name: 'discover_tools', parameters: {request: 'Missing specialization'}}]}
+            : calls === 2 ? {thought: '', action: 'tool_call', toolCalls: [{name: 'execute', parameters: {}}]}
+            : {thought: '', action: 'final_answer', finalAnswer: 'Observed project evidence'}}
+    }} as unknown as Asker
+    const result = await new LLMActor(asker).run('Obtain evidence', {
+        tools: [{name: 'execute', description: 'Universal execution', parameters: z.object({}), execute: () => 'Observed project evidence'}],
+        onDiscoverTools: async () => {throw new Error('No specialist found')},
+    })
+    expect(result.ok).toBe(true)
+    expect(systems[0]).toContain('compose available primitives')
+    expect(prompts[1]).toContain('compose available primitives')
+    expect(systems[0]).not.toContain('If no applicable capability exists, explain the limitation')
+    expect(result.steps[0]!.toolResults[0]!.isError).toBe(true)
+    expect(result.steps[1]!.toolResults[0]!.result).toBe('Observed project evidence')
+})
+
+
+test('recoverable tool failures retain structured observations and allow another method', async () => {
+    const observation = {exitCode: 7, stdout: 'partial evidence', stderr: 'failed operation'}
+    const result = await new LLMActor(createMockAsker([
+        {thought: '', action: 'tool_call', toolCalls: [{name: 'execute', parameters: {}}]},
+        {thought: '', action: 'tool_call', toolCalls: [{name: 'read', parameters: {}}]},
+        {thought: '', action: 'final_answer', finalAnswer: 'Recovered evidence'},
+    ])).run('Gather evidence', {tools: [
+        {name: 'execute', description: 'Execution', parameters: z.object({}), execute: () => {throw new ToolExecutionError('Command failed', observation)}},
+        {name: 'read', description: 'Read evidence', parameters: z.object({}), execute: () => 'Recovered evidence'},
+    ]})
+    expect(result.ok).toBe(true)
+    expect(result.steps[0]!.toolResults[0]).toMatchObject({isError: true, error: 'Command failed', result: observation})
+    expect(result.steps[1]!.toolResults[0]).toMatchObject({isError: false, result: 'Recovered evidence'})
+})
+
+test('unchanged failed observations with proven read-only effects replan then stop', async () => {
+    const decision={thought:'',action:'tool_call',toolCalls:[{name:'command',parameters:{input:'missing'}}]}
+    const result=await new LLMActor(createMockAsker(Array.from({length:8},()=>decision))).run('Inspect evidence',{maxSteps:8,tools:[{
+        name:'command',description:'Mixed execution',parameters:z.object({input:z.string()}),
+        isReadOnlyResult:result=>result.observationOnly===true,
+        execute:()=>{throw new ToolExecutionError('Missing input',{exitCode:2,stderr:'missing',observationOnly:true})},
+    }]})
+    expect(result.haltReason).toBe('error')
+    expect(result.totalSteps).toBe(3)
+    expect(result.steps[0]!.toolResults[0]!.error).toBe('Missing input')
+    expect(result.steps[1]!.toolResults[0]!.error).toContain('No new evidence')
+})
+
+test('a different failed-read recovery input is allowed', async () => {
+    const result=await new LLMActor(createMockAsker([
+        {thought:'',action:'tool_call',toolCalls:[{name:'command',parameters:{input:'missing'}}]},
+        {thought:'',action:'tool_call',toolCalls:[{name:'command',parameters:{input:'real'}}]},
+        {thought:'',action:'final_answer',finalAnswer:'Observed real evidence'},
+    ])).run('Inspect evidence',{tools:[{
+        name:'command',description:'Mixed execution',parameters:z.object({input:z.string()}),
+        isReadOnlyResult:result=>result.observationOnly===true,
+        execute:({input})=>{if(input==='missing')throw new ToolExecutionError('Missing input',{exitCode:2,observationOnly:true});return {stdout:'real evidence',observationOnly:true}},
+    }]})
+    expect(result.ok).toBe(true)
+    expect(result.totalSteps).toBe(3)
+})
+
+
+test('LLMActor rejects completion when its requested output schema cannot be repaired', async () => {
+    const asker = createMockAsker([{thought: '', action: 'final_answer', finalAnswer: 'Unstructured answer'}, 'still not JSON'])
+    const result = await new LLMActor(asker).run('Return a typed result', {schema: z.object({ready: z.boolean()})})
+    expect(result.ok).toBe(false)
+    expect(result.haltReason).toBe('error')
+    expect(result.finalText).toBe('Unstructured answer')
+    expect(result.issues.some(issue => issue.kind === 'llm')).toBe(true)
+})
+
+test('LLMActor preserves a valid false value returned by output repair', async () => {
+    const asker = createMockAsker([{thought: '', action: 'final_answer', finalAnswer: 'Disabled'}, {enabled: false}])
+    const result = await new LLMActor(asker).run('Return whether enabled', {schema: z.object({enabled: z.boolean()}).transform(value => value.enabled)})
+    expect(result.ok).toBe(true)
+    expect(result.output).toBe(false)
+})
+
+
+test('structured output repair retains Actor routing and hard provider defaults', async () => {
+    const asks: any[] = []
+    const base = createMockAsker([{thought: '', action: 'final_answer', finalAnswer: 'Disabled'}, {enabled: false}])
+    const asker = {json: async (prompt: string, schema: any, options: any) => { asks.push(options); return base.json(prompt, schema, options) }}
+    const defaults = {task: 'code', model: 'mock/mock-model', allowedProviders: ['mock'], preferLocal: false}
+    const result = await new LLMActor(asker as any, {askOptions: defaults}).run('Return typed feature state', {schema: z.object({enabled: z.boolean()})})
+    expect(result.ok).toBe(true)
+    expect(asks).toHaveLength(2)
+    expect(asks[0]).toMatchObject(defaults)
+    expect(asks[1]).toMatchObject(defaults)
+})
+
+test('structured output repair lets per-run routing override Actor defaults', async () => {
+    const asks: any[] = []
+    const base = createMockAsker([{thought: '', action: 'final_answer', finalAnswer: 'Disabled'}, {enabled: false}])
+    const asker = {json: async (prompt: string, schema: any, options: any) => { asks.push(options); return base.json(prompt, schema, options) }}
+    const result = await new LLMActor(asker as any, {askOptions: {task: 'default', allowedProviders: ['other']}}).run('Return typed feature state', {schema: z.object({enabled: z.boolean()}), askOptions: {task: 'code', model: 'mock/mock-model', allowedProviders: ['mock']}})
+    expect(result.ok).toBe(true)
+    expect(asks[1]).toMatchObject({task: 'code', model: 'mock/mock-model', allowedProviders: ['mock']})
 })

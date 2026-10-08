@@ -33,6 +33,7 @@ export interface AskerOptions {
     providerState?: {providers: Record<string, ProviderConfig>}
     router?: ModelRouter
     routes?: Record<string, string | ModelTarget>
+    fallbacks?: Record<string, Array<string | ModelTarget>>
     defaultModel?: string | ModelTarget
     preferLocal?: boolean
     completion?: CompletionEngine
@@ -66,6 +67,7 @@ export class Asker {
         // Configure router
         this.router = options.router ?? new ModelRouter({
             routes: options.routes,
+            fallbacks: options.fallbacks,
             defaultModel: options.defaultModel,
             preferLocal: this.preferLocal,
             advicePath: options.advicePath,
@@ -154,23 +156,33 @@ export class Asker {
             const probe = await ProviderDiscovery.probeOllama(current.ollama.host)
             current.ollama = {...current.ollama, available: probe.installed, models: probe.models}
         }
-        const available = Object.entries(current).filter(([, config]) => config.available !== false && config.enabled !== false).map(([id]) => id)
-        const target = this.router.resolve(
+        const allowFallback = !options.model && !options.providerConfig
+        const failedProviders = new Set<string>()
+        const eligibleProviders = () => Object.entries(current).filter(([id, config]) =>
+            config.available !== false && config.enabled !== false && (!options.allowedProviders || options.allowedProviders.includes(id)) && (!allowFallback || (!this.circuit.failure(id) && !failedProviders.has(id))),
+        ).map(([id]) => id)
+        const available = eligibleProviders()
+        let target = this.router.resolve(
             options.model ? parseModelTarget(options.model) : options.task,
             available,
             options.preferLocal ?? this.preferLocal,
             current,
         )
-        const config = options.providerConfig
+        let config = options.providerConfig
             ?? this.providers.get(target.providerId)
             ?? {id: target.providerId}
+        if ((options.allowedProviders && !options.allowedProviders.includes(target.providerId)) ||
+            (allowFallback && !available.includes(target.providerId))) return {
+            ok: false, text: '', model: target,
+            failure: {kind: 'configuration', message: 'No eligible configured provider/model target for this request.', fatal: false, retryable: false},
+        }
 
         const format = options.schema
             ? resolveResponseFormat(options.schema)
             : undefined
 
         let attempt = 0
-        const executeCall = async (callPrompt: string): Promise<GenerationResult<T>> => {
+        const executeAttempt = async (callPrompt: string): Promise<GenerationResult<T>> => {
             attempt += 1
             const started = performance.now()
             const parentMetrics = options.metrics
@@ -222,6 +234,22 @@ export class Asker {
                 },
             })
             return res
+        }
+
+        const executeCall = async (callPrompt: string): Promise<GenerationResult<T>> => {
+            while (true) {
+                const result = await executeAttempt(callPrompt)
+                if (result.ok || !(result.failure?.fatal || result.failure?.retryable) || !allowFallback || options.signal?.aborted)
+                    return result
+                failedProviders.add(target.providerId)
+                const remaining = eligibleProviders()
+                if (!remaining.length) return result
+                const next = this.router.resolve(options.task, remaining, options.preferLocal ?? this.preferLocal, current)
+                // Explicit custom routers must not defeat provider exclusion or loop.
+                if (!remaining.includes(next.providerId)) return result
+                target = next
+                config = this.providers.get(target.providerId) ?? {id: target.providerId}
+            }
         }
 
         let effectivePrompt = prompt

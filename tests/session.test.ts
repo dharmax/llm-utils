@@ -109,3 +109,30 @@ test('LLMSession bounds replayable history by character budget', () => {
     expect(history.at(-1)?.content).toContain('latest observation')
     expect(history.at(-1)?.content).toContain('[history truncated]')
 })
+
+test('LLMSession retains structured failed-command observations for follow-up requests', async () => {
+    const processResult = Bun.spawnSync([process.execPath, '-e', "console.log('partial-observation'); console.error('input unavailable'); process.exit(2)"])
+    const observation = {success: false, exitCode: processResult.exitCode, stdout: processResult.stdout.toString(), stderr: processResult.stderr.toString(), stdoutTruncated: false, cancelled: false}
+    expect(observation.exitCode).toBe(2)
+    let followUp = ''
+    let calls = 0
+    const actor = {
+        async run(goal: string): Promise<ActorRunResult> {
+            if (++calls > 1) {
+                followUp = goal
+                return {ok: true, finalText: 'Mechanism test only.', steps: [], totalSteps: 0, haltReason: 'completed', issues: []}
+            }
+            return {ok: false, finalText: '', totalSteps: 1, haltReason: 'error', error: 'Command failed', issues: [], steps: [{
+                step: 1, thought: 'private reasoning excluded', action: 'tool_call',
+                toolCalls: [{callId: '1', toolName: 'run_command', parameters: {command: 'failed probe'}}],
+                toolResults: [{callId: '1', toolName: 'run_command', isError: true, error: 'Command failed', result: observation}],
+            }]}
+        },
+    } as unknown as LLMActor
+    const session = new LLMSession({} as Asker)
+    await session.run(actor, 'Inspect the local input.')
+    await session.run(actor, 'What did the failed command actually observe?')
+    expect(followUp).toContain('ERROR: Command failed')
+    expect(followUp).toContain(JSON.stringify(observation))
+    expect(followUp).not.toContain('private reasoning excluded')
+})

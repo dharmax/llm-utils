@@ -158,7 +158,7 @@ ${goal}`
                     continue
 
                 const observation = result.isError
-                    ? `ERROR: ${result.error ?? 'Unknown tool error'}`
+                    ? `ERROR: ${result.error ?? 'Unknown tool error'}${result.result !== undefined ? `; observed result: ${JSON.stringify(result.result)}` : ''}`
                     : JSON.stringify(result.result)
 
                 observations.push(`${call.toolName}(${JSON.stringify(call.parameters)}) -> ${observation}`)
@@ -223,4 +223,3 @@ ${goal}`
         this.pruneHistory()
     }
 }
-
