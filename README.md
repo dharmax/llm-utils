@@ -693,6 +693,10 @@ metrics.record({
 })
 
 console.log(metrics.totals())
+// totalCostUsd / avgCostUsd are null when any call has unknown pricing.
+// execution.local / remote / unknown retain tokens, calls, latency and known/unknown cost.
+// byModel() and byProvider() retain the same breakdown.
+// Asker preserves ProviderConfig.local and optional pricing; provider-reported cost wins.
 // { calls: 1, successes: 1, failures: 0, promptTokens: 120, completionTokens: 45, totalTokens: 165, avgLatencyMs: 410, ... }
 ```
 

@@ -31,6 +31,8 @@ export interface LlmMetricEvent extends MetricBase {
     completionTokens: number
     totalTokens: number
     costUsd?: number
+    /** Undefined for legacy or unclassified events. */
+    local?: boolean
     attempt?: number
     failureKind?: string
     finishReason?: string
@@ -45,11 +47,14 @@ export interface SystemOneMetricEvent extends MetricBase {
     available: boolean
 }
 
+export type ToolFailureCategory = 'malformed_parameters' | 'not_found' | 'safety_preview' | 'unavailable' | 'cancelled' | 'execution' | 'stalled' | 'unclassified'
+
 export interface ActorMetricEvent extends MetricBase {
     kind: 'actor'
     steps: number
     toolCalls: number
     toolFailures: number
+    toolFailureCategories?: Partial<Record<ToolFailureCategory, number>>
     missingToolRecoveries: number
     haltReason: string
 }
@@ -73,6 +78,17 @@ export interface MetricsQuery {
     order?: 'asc' | 'desc'
 }
 
+export interface ExecutionUsage {
+    calls: number
+    promptTokens: number
+    completionTokens: number
+    totalTokens: number
+    totalLatencyMs: number
+    knownCostUsd: number
+    costKnownCalls: number
+    unknownCostTokens: number
+}
+
 export interface AggregateMetrics {
     calls: number
     successes: number
@@ -86,8 +102,12 @@ export interface AggregateMetrics {
     avgPromptTokens: number
     avgCompletionTokens: number
     avgTotalTokens: number
-    totalCostUsd: number
-    avgCostUsd: number
+    totalCostUsd: number | null
+    avgCostUsd: number | null
+    knownCostUsd: number
+    costKnownCalls: number
+    unknownCostTokens: number
+    execution: Record<'local' | 'remote' | 'unknown', ExecutionUsage>
 }
 
 export interface UsagePricing {
@@ -221,6 +241,9 @@ export class LlmMetrics {
         let totalTokens = 0
         let totalLatency = 0
         let totalCost = 0
+        let costKnownCalls = 0
+        let unknownCostTokens = 0
+        const execution = emptyAggregate().execution
         let successes = 0
         let failures = 0
 
@@ -233,7 +256,19 @@ export class LlmMetrics {
             totalCompletion += event.completionTokens
             totalTokens += event.totalTokens
             totalLatency += event.latencyMs
-            totalCost += event.costUsd ?? 0
+            const knownCost = typeof event.costUsd === 'number' && Number.isFinite(event.costUsd) && event.costUsd >= 0
+            totalCost += knownCost ? event.costUsd! : 0
+            costKnownCalls += Number(knownCost)
+            unknownCostTokens += knownCost ? 0 : event.totalTokens
+            const bucket = execution[event.local === true ? 'local' : event.local === false ? 'remote' : 'unknown']
+            bucket.calls += 1
+            bucket.promptTokens += event.promptTokens
+            bucket.completionTokens += event.completionTokens
+            bucket.totalTokens += event.totalTokens
+            bucket.totalLatencyMs += event.latencyMs
+            bucket.knownCostUsd += knownCost ? event.costUsd! : 0
+            bucket.costKnownCalls += Number(knownCost)
+            bucket.unknownCostTokens += knownCost ? 0 : event.totalTokens
         }
 
         const calls = events.length
@@ -250,8 +285,9 @@ export class LlmMetrics {
             avgPromptTokens: Math.round(totalPrompt / calls),
             avgCompletionTokens: Math.round(totalCompletion / calls),
             avgTotalTokens: Math.round(totalTokens / calls),
-            totalCostUsd: totalCost,
-            avgCostUsd: Math.round((totalCost / calls) * 1_000_000) / 1_000_000,
+            totalCostUsd: costKnownCalls === calls ? totalCost : null,
+            avgCostUsd: costKnownCalls === calls ? Math.round((totalCost / calls) * 1_000_000) / 1_000_000 : null,
+            knownCostUsd: totalCost, costKnownCalls, unknownCostTokens, execution,
         }
     }
 
@@ -294,6 +330,7 @@ export class MetricsEngine {
     record(result: GenerationResult, latencyMs: number, pricing?: UsagePricing): void {
         if (!result.ok || !result.usage)
             return
+        const costUsd = result.costUsd ?? calculateUsageCost(result.usage, pricing)
         this.metrics.record({
             timestamp: new Date().toISOString(),
             providerId: result.model.providerId,
@@ -306,11 +343,12 @@ export class MetricsEngine {
             error: result.failure?.message,
             failureKind: result.failure?.kind,
             finishReason: result.finishReason,
-            ...(pricing ? {costUsd: calculateUsageCost(result.usage, pricing)} : {}),
+            local: result.local,
+            ...(costUsd !== null ? {costUsd} : {}),
         })
     }
 
-    getReport(): Record<string, number> {
+    getReport(): Record<string, number | null> {
         const totals = this.metrics.totals()
         return {
             turnCount: totals.calls,
@@ -328,12 +366,16 @@ export function createMetricsPubSub(name = 'LLM Metrics'): PubSub {
     return new PubSub(name)
 }
 
-export function calculateUsageCost(usage?: Usage, pricing?: UsagePricing): number {
-    if (!usage || !pricing)
-        return 0
-    const inCost = (usage.promptTokens / 1_000_000) * (pricing.inputCostPerMillionTokensUsd ?? 0)
-    const outCost = (usage.completionTokens / 1_000_000) * (pricing.outputCostPerMillionTokensUsd ?? 0)
-    return inCost + outCost
+export function calculateUsageCost(usage?: Usage, pricing?: UsagePricing): number | null {
+    const input = pricing?.inputCostPerMillionTokensUsd, output = pricing?.outputCostPerMillionTokensUsd
+    if (!usage?.available || typeof input !== 'number' || typeof output !== 'number'
+        || !Number.isFinite(input) || !Number.isFinite(output) || input < 0 || output < 0)
+        return null
+    return (usage.promptTokens * input + usage.completionTokens * output) / 1_000_000
+}
+
+function emptyExecutionUsage(): ExecutionUsage {
+    return {calls: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, totalLatencyMs: 0, knownCostUsd: 0, costKnownCalls: 0, unknownCostTokens: 0}
 }
 
 function emptyAggregate(): AggregateMetrics {
@@ -352,5 +394,7 @@ function emptyAggregate(): AggregateMetrics {
         avgTotalTokens: 0,
         totalCostUsd: 0,
         avgCostUsd: 0,
+        knownCostUsd: 0, costKnownCalls: 0, unknownCostTokens: 0,
+        execution: {local: emptyExecutionUsage(), remote: emptyExecutionUsage(), unknown: emptyExecutionUsage()},
     }
 }

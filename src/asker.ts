@@ -6,7 +6,7 @@ import {FileTemplateSource, PromptEngine} from './prompts.ts'
 import {ProviderCircuit} from './provider-circuit.ts'
 import {ModelRouter, parseModelTarget} from './routing.ts'
 import {ProviderDiscovery} from './discovery.ts'
-import {childMetricsContext, emitMetric, type MetricsSink} from './metrics.ts'
+import {childMetricsContext, emitMetric, calculateUsageCost, type MetricsSink} from './metrics.ts'
 import {
     parseStructuredJsonResult,
     resolveResponseFormat,
@@ -207,11 +207,15 @@ export class Asker {
                 },
             )) as GenerationResult<T>
             const usage = res.usage
+            const local = config.local
+            const costUsd = typeof res.costUsd === 'number' && Number.isFinite(res.costUsd) && res.costUsd >= 0 ? res.costUsd : calculateUsageCost(usage, config.pricing)
             emitMetric(options.metricsSink ?? this.metricsSink, {
                 kind: 'llm',
                 timestamp: new Date().toISOString(),
                 providerId: target.providerId,
                 modelId: target.modelId,
+                local,
+                ...(costUsd !== null ? {costUsd} : {}),
                 promptTokens: usage?.promptTokens ?? 0,
                 completionTokens: usage?.completionTokens ?? 0,
                 totalTokens: usage?.totalTokens ?? 0,
@@ -233,7 +237,7 @@ export class Asker {
                     ...(providerEvidence.keys.length ? {providerOptionKeys: providerEvidence.keys, providerOptionsHash: providerEvidence.hash} : {}),
                 },
             })
-            return res
+            return {...res, local, ...(costUsd !== null ? {costUsd} : {})}
         }
 
         const executeCall = async (callPrompt: string): Promise<GenerationResult<T>> => {

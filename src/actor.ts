@@ -8,7 +8,7 @@ import {childMetricsContext, emitMetric, type MetricsContext, type MetricsSink} 
 
 /** Recoverable tool failure with its structured observation preserved for replanning. */
 export class ToolExecutionError extends Error {
-    constructor(message: string, public readonly result?: unknown) {
+    constructor(message: string, public readonly result?: unknown, public readonly category: import('./metrics.ts').ToolFailureCategory = 'execution') {
         super(message)
         this.name = 'ToolExecutionError'
     }
@@ -49,6 +49,7 @@ export interface ToolExecutionResult {
     recoveredMissingTool?: boolean
     /** No registered or recovered capability exists for this invocation. */
     unavailable?: boolean
+    failureCategory?: import('./metrics.ts').ToolFailureCategory
 }
 
 export interface ActorStepRecord {
@@ -392,7 +393,8 @@ export class LLMActor {
                         callId: call.callId,
                         toolName: call.toolName,
                         isError: true,
-                        error: `Error in onMissingTool handler for "${call.toolName}": ${err instanceof Error ? err.message : String(err)}`,
+                        failureCategory: err instanceof ToolAbortError ? 'cancelled' : 'execution',
+                    error: `Error in onMissingTool handler for "${call.toolName}": ${err instanceof Error ? err.message : String(err)}`,
                     })
                     if (err instanceof ToolAbortError) { abortError = err.message; break }
                     continue
@@ -405,6 +407,7 @@ export class LLMActor {
                     toolName: call.toolName,
                     isError: true,
                     unavailable: true,
+                    failureCategory: 'unavailable',
                     error: runLocalTools
                         ? `Tool "${call.toolName}" is not available for this run. Available tools: ${[...tools.keys()].join(', ')}`
                         : `Tool "${call.toolName}" is not registered. Available tools: ${[...tools.keys()].join(', ')}`,
@@ -421,6 +424,7 @@ export class LLMActor {
                     callId: call.callId,
                     toolName: call.toolName,
                     isError: true,
+                    failureCategory: 'malformed_parameters',
                     error: `Invalid parameters for tool "${call.toolName}": ${parsed.error.message}`,
                 })
                 continue
@@ -441,6 +445,7 @@ export class LLMActor {
                     callId: call.callId,
                     toolName: call.toolName,
                     isError: true,
+                    failureCategory: err instanceof ToolAbortError ? 'cancelled' : err instanceof ToolExecutionError ? err.category : 'execution',
                     error: err instanceof Error ? err.message : String(err),
                     ...(err instanceof ToolExecutionError && err.result !== undefined ? {result: err.result} : {}),
                 })
@@ -503,6 +508,11 @@ export class LLMActor {
                 steps: result.totalSteps,
                 toolCalls: steps.reduce((sum, step) => sum + step.toolCalls.length, 0),
                 toolFailures: toolResults.filter(item => item.isError).length,
+                toolFailureCategories: toolResults.filter(item => item.isError).reduce<Partial<Record<import('./metrics.ts').ToolFailureCategory, number>>>((counts, item) => {
+                    const category = item.failureCategory ?? 'unclassified'
+                    counts[category] = (counts[category] ?? 0) + 1
+                    return counts
+                }, {}),
                 missingToolRecoveries: toolResults.filter(item => item.recoveredMissingTool).length,
                 haltReason: result.haltReason,
                 traceId: runMetrics?.traceId,

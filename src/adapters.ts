@@ -121,11 +121,12 @@ export class OpenAIAdapter implements ProviderAdapter {
             timeoutMs,
             extract: data => {
                 const choice = (data as {choices?: Array<{message?: {content?: string}; finish_reason?: string}>})?.choices?.[0]
-                const usageData = (data as {usage?: {prompt_tokens?: number; completion_tokens?: number; total_tokens?: number}})?.usage
+                const usageData = (data as {usage?: {prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; cost?: number}})?.usage
                 return {
                     text: choice?.message?.content ?? '',
                     usage: usageData ? toUsage(usageData.prompt_tokens, usageData.completion_tokens, usageData.total_tokens) : undefined,
                     finishReason: choice?.finish_reason,
+                    ...(typeof usageData?.cost === 'number' && Number.isFinite(usageData.cost) && usageData.cost >= 0 ? {costUsd: usageData.cost} : {}),
                 }
             },
         })
@@ -313,7 +314,7 @@ interface PostJsonOptions {
     body: Record<string, unknown>
     signal?: AbortSignal
     timeoutMs?: number
-    extract: (data: unknown) => {text: string; usage?: Usage; finishReason?: string}
+    extract: (data: unknown) => {text: string; usage?: Usage; finishReason?: string; costUsd?: number}
 }
 
 async function postJson(opts: PostJsonOptions): Promise<GenerationResult> {
@@ -368,6 +369,7 @@ async function postJson(opts: PostJsonOptions): Promise<GenerationResult> {
             text: extracted.text,
             usage: extracted.usage,
             finishReason: extracted.finishReason,
+            ...(extracted.costUsd !== undefined ? {costUsd: extracted.costUsd} : {}),
             model: {providerId, modelId},
             raw: parsed,
         }

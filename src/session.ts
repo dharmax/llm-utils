@@ -15,7 +15,7 @@ export interface SessionMessage {
 
 export interface SessionContext {
     history: SessionMessage[]
-    metadata?: Record<string, number>
+    metadata?: Record<string, number | null>
 }
 
 export class LLMSession {

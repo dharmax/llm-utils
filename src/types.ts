@@ -59,6 +59,10 @@ export interface GenerationResult<T = unknown> {
     /** Provider-reported normal termination reason, e.g. stop/length. */
     finishReason?: string
     raw?: unknown
+    /** Actual execution locality, preserved by Asker from provider configuration. */
+    local?: boolean
+    /** Provider-reported or explicitly priced cost; absent means unknown. */
+    costUsd?: number
     latencyMs?: number
 }
 
@@ -71,6 +75,8 @@ export interface ProviderConfig {
     available?: boolean
     models?: ModelInfo[]
     local?: boolean
+    /** Optional caller-supplied prices. Missing prices remain unknown. */
+    pricing?: import('./metrics.ts').UsagePricing
     /** Caller-declared facts, never inferred from credentials. */
     entitlements?: string[]
     /** Default context capacity where supported; Ollama maps this to num_ctx. */

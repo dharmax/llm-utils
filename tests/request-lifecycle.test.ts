@@ -66,7 +66,7 @@ test('usage cost calculates correctly with pricing rates', () => {
         totalTokens: 1_500_000,
         available: true,
     }
-    expect(calculateUsageCost(usage)).toBe(0)
+    expect(calculateUsageCost(usage)).toBeNull()
     expect(calculateUsageCost(usage, {
         inputCostPerMillionTokensUsd: 2,
         outputCostPerMillionTokensUsd: 4,
