@@ -297,7 +297,7 @@ export class Asker {
                     : undefined
                 const estimatedOutputTokens = Math.max(1, Math.ceil(new TextEncoder().encode(res.text ?? '').length / 3))
                 const chargedTokens = reportedTokens ?? (estimatedInputTokens + estimatedOutputTokens)
-                tokenBudget.remainingTokens += reservation - chargedTokens
+                tokenBudget.remainingTokens = Math.max(0, tokenBudget.remainingTokens + reservation - chargedTokens)
             }
             emitMetric(options.metricsSink ?? this.metricsSink, {
                 kind: 'llm',
