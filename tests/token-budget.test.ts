@@ -117,4 +117,24 @@ describe('token budget', () => {
         expect(budget.remainingTokens).toBeGreaterThan(900)
     })
 
+    it('clamps the remaining budget when provider-reported usage exceeds the reservation', async () => {
+        class OvershootAdapter extends UsageAdapter {
+            override async generate(options: GenerateOptions): Promise<GenerationResult> {
+                this.calls += 1
+                return {
+                    ok: true,
+                    text: 'ok',
+                    model: {providerId: this.id, modelId: options.modelId},
+                    usage: {promptTokens: 5000, completionTokens: 1000, totalTokens: 6000, available: true},
+                }
+            }
+        }
+        const adapter = new OvershootAdapter()
+        const budget: TokenBudget = {remainingTokens: 2000, requestExtension: request => request.requiredTokens}
+        const result = await asker(adapter).ask('x'.repeat(3000), {tokenBudget: budget})
+
+        expect(result.ok).toBe(true)
+        expect(budget.remainingTokens).toBe(0)
+    })
+
 })
