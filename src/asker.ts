@@ -267,7 +267,7 @@ export class Asker {
                 },
             )) as GenerationResult<T>
             const usage = res.usage
-            if (tokenBudget && usage?.available && Number.isFinite(usage.totalTokens) && usage.totalTokens >= 0)
+            if (tokenBudget && usage?.available && Number.isFinite(usage.totalTokens) && usage.totalTokens > 0)
                 tokenBudget.remainingTokens += reservation - usage.totalTokens
             emitMetric(options.metricsSink ?? this.metricsSink, {
                 kind: 'llm',
