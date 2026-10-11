@@ -3,7 +3,7 @@ import {z} from 'zod'
 import type {Asker} from './asker.ts'
 import {type ContextResolver, resolveContext} from './context.ts'
 import {parseStructuredJsonResult, zodToJsonSchema} from './structured-json.ts'
-import type {AskOptions} from './types.ts'
+import type {AskOptions, TokenBudgetExtensionRequest} from './types.ts'
 import {childMetricsContext, emitMetric, type MetricsContext, type MetricsSink} from './metrics.ts'
 
 /** Recoverable tool failure with its structured observation preserved for replanning. */
@@ -84,6 +84,9 @@ export interface ActorRunResult<T = unknown> {
 export interface ActorOptions {
     tools?: ToolDefinition[]
     maxSteps?: number
+    /** Baseline cumulative inference budget for one Actor run. Hosts may override or extend it at runtime. */
+    maxRunTokens?: number
+    onTokenBudgetRequest?: (request: TokenBudgetExtensionRequest) => number | Promise<number>
     /** Hard guard against accidentally serializing a global capability universe into one prompt. */
     maxToolCatalogChars?: number
     system?: string
@@ -101,6 +104,8 @@ export interface ActorRunOptions<T = unknown> {
     /** Exact tool surface for this run. When omitted, the actor's registered tools are used. */
     tools?: readonly ToolDefinition[]
     maxSteps?: number
+    maxRunTokens?: number
+    onTokenBudgetRequest?: (request: TokenBudgetExtensionRequest) => number | Promise<number>
     schema?: ZodType<T>
     signal?: AbortSignal
     context?: unknown
@@ -218,6 +223,8 @@ export function normalizeToolParameters(params: Record<string, unknown>, schema:
 export class LLMActor {
     private readonly tools = new Map<string, ToolDefinition>()
     private readonly maxSteps: number
+    private readonly maxRunTokens?: number
+    private readonly onTokenBudgetRequest?: (request: TokenBudgetExtensionRequest) => number | Promise<number>
     private readonly maxToolCatalogChars: number
     private readonly system?: string
     private readonly defaultAskOptions?: AskOptions
@@ -234,6 +241,10 @@ export class LLMActor {
         options: ActorOptions = {},
     ) {
         this.maxSteps = options.maxSteps ?? 5
+        if (options.maxRunTokens !== undefined && (!Number.isSafeInteger(options.maxRunTokens) || options.maxRunTokens <= 0))
+            throw new Error('maxRunTokens must be a positive safe integer.')
+        this.maxRunTokens = options.maxRunTokens
+        this.onTokenBudgetRequest = options.onTokenBudgetRequest
         this.maxToolCatalogChars = options.maxToolCatalogChars ?? 32_000
         this.system = options.system
         this.defaultAskOptions = options.askOptions
@@ -483,9 +494,17 @@ export class LLMActor {
         const parentMetrics = options.metrics ?? options.askOptions?.metrics
         const runMetrics = parentMetrics ? childMetricsContext(parentMetrics) : undefined
         const metricsSink = options.metricsSink ?? options.askOptions?.metricsSink
-        const runAskOptions: AskOptions | undefined = (options.askOptions || runMetrics || metricsSink || signal)
+        const runTokenLimit = options.maxRunTokens ?? this.maxRunTokens
+        if (runTokenLimit !== undefined && (!Number.isSafeInteger(runTokenLimit) || runTokenLimit <= 0))
+            throw new Error('maxRunTokens must be a positive safe integer.')
+        const tokenBudget = options.askOptions?.tokenBudget ?? (runTokenLimit !== undefined ? {
+            remainingTokens: runTokenLimit,
+            requestExtension: options.onTokenBudgetRequest ?? this.onTokenBudgetRequest,
+        } : undefined)
+        const runAskOptions: AskOptions | undefined = (options.askOptions || runMetrics || metricsSink || signal || tokenBudget)
             ? {
                 ...options.askOptions,
+                ...(tokenBudget ? {tokenBudget} : {}),
                 ...(signal ? {signal} : {}),
                 ...(runMetrics ? {metrics: runMetrics} : {}),
                 ...(metricsSink ? {metricsSink} : {}),
