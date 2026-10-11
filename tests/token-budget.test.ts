@@ -2,6 +2,7 @@ import {describe, expect, it} from 'bun:test'
 import {
     Asker,
     CompletionEngine,
+    LLMActor,
     type GenerateOptions,
     type GenerationResult,
     type ProviderAdapter,
@@ -69,4 +70,31 @@ describe('token budget', () => {
         expect(requests).toEqual([1100])
         expect(budget.remainingTokens).toBe(1150)
     })
+    it('lets an Actor host adapt a per-run budget without changing Actor internals', async () => {
+        class ActorAdapter extends UsageAdapter {
+            override async generate(options: GenerateOptions): Promise<GenerationResult> {
+                this.calls += 1
+                return {
+                    ok: true,
+                    text: JSON.stringify({thought: 'done', action: 'final_answer', toolCalls: [], finalAnswer: 'done'}),
+                    model: {providerId: this.id, modelId: options.modelId},
+                    usage: {promptTokens: 200, completionTokens: 20, totalTokens: 220, available: true},
+                }
+            }
+        }
+        const adapter = new ActorAdapter()
+        const requests: number[] = []
+        const actor = new LLMActor(asker(adapter), {
+            maxRunTokens: 100,
+            onTokenBudgetRequest: request => {
+                requests.push(request.requiredTokens)
+                return 10000
+            },
+        })
+
+        const result = await actor.run('finish')
+        expect(result.ok).toBe(true)
+        expect(requests.length).toBe(1)
+    })
+
 })
