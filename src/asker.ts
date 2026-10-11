@@ -191,6 +191,7 @@ export class Asker {
             const maxTokens = options.maxTokens ?? config.maxTokens
             const temperature = options.temperature ?? config.temperature
             const contextWindow = options.contextWindow ?? config.contextWindow
+            const timeoutMs = options.timeoutMs ?? config.timeoutMs ?? (config.local ? 180_000 : 60_000)
             const res = await this.circuit.execute(target, () => this.completion.generate(
                 callPrompt,
                 target,
@@ -203,7 +204,7 @@ export class Asker {
                     providerOptions: options.providerOptions,
                     format,
                     signal: options.signal,
-                    timeoutMs: options.timeoutMs,
+                    timeoutMs,
                 },
             )) as GenerationResult<T>
             const usage = res.usage
@@ -230,6 +231,7 @@ export class Asker {
                     ...(maxTokens !== undefined ? {maxTokens} : {}),
                     ...(temperature !== undefined ? {temperature} : {}),
                     ...(contextWindow !== undefined ? {contextWindow} : {}),
+                    timeoutMs,
                     ...(providerEvidence.keys.length ? {providerOptionKeys: providerEvidence.keys, providerOptionsHash: providerEvidence.hash} : {}),
                 },
             })
