@@ -79,6 +79,8 @@ export interface ProviderConfig {
     maxTokens?: number
     /** Default sampling temperature. Per-call values override this. */
     temperature?: number
+    /** Default wall-clock timeout for one provider inference. Per-call values override this. */
+    timeoutMs?: number
     /** Provider-specific defaults. Adapters interpret these without llm-utils inventing a universal taxonomy. */
     providerOptions?: Record<string, unknown>
 }
