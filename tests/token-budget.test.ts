@@ -97,4 +97,24 @@ describe('token budget', () => {
         expect(requests.length).toBe(1)
     })
 
+    it('reconciles successful unmetered calls from observed text instead of charging max output', async () => {
+        class UnmeteredAdapter extends UsageAdapter {
+            override async generate(options: GenerateOptions): Promise<GenerationResult> {
+                this.calls += 1
+                return {
+                    ok: true,
+                    text: 'ok',
+                    model: {providerId: this.id, modelId: options.modelId},
+                }
+            }
+        }
+        const adapter = new UnmeteredAdapter()
+        const budget: TokenBudget = {remainingTokens: 2000}
+        const result = await asker(adapter).ask('x'.repeat(3000), {tokenBudget: budget})
+
+        expect(result.ok).toBe(true)
+        expect(adapter.calls).toBe(1)
+        expect(budget.remainingTokens).toBeGreaterThan(900)
+    })
+
 })
