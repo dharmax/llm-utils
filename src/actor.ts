@@ -8,7 +8,11 @@ import {childMetricsContext, emitMetric, type MetricsContext, type MetricsSink} 
 
 /** Recoverable tool failure with its structured observation preserved for replanning. */
 export class ToolExecutionError extends Error {
-    constructor(message: string, public readonly result?: unknown) {
+    constructor(
+        message: string,
+        public readonly result?: unknown,
+        public readonly category?: string,
+    ) {
         super(message)
         this.name = 'ToolExecutionError'
     }
