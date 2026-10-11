@@ -291,8 +291,14 @@ export class Asker {
                 },
             )) as GenerationResult<T>
             const usage = res.usage
-            if (tokenBudget && usage?.available && Number.isSafeInteger(usage.totalTokens) && usage.totalTokens > 0)
-                tokenBudget.remainingTokens += reservation - usage.totalTokens
+            if (tokenBudget) {
+                const reportedTokens = usage?.available && Number.isSafeInteger(usage.totalTokens) && usage.totalTokens > 0
+                    ? usage.totalTokens
+                    : undefined
+                const estimatedOutputTokens = Math.max(1, Math.ceil(new TextEncoder().encode(res.text ?? '').length / 3))
+                const chargedTokens = reportedTokens ?? (estimatedInputTokens + estimatedOutputTokens)
+                tokenBudget.remainingTokens += reservation - chargedTokens
+            }
             emitMetric(options.metricsSink ?? this.metricsSink, {
                 kind: 'llm',
                 timestamp: new Date().toISOString(),
