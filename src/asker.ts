@@ -194,6 +194,18 @@ export class Asker {
             const timeoutMs = options.timeoutMs ?? config.timeoutMs ?? (config.local ? 180_000 : 60_000)
             const serializedInput = callPrompt + (options.system ?? '') + (format ? JSON.stringify(format) : '')
             const inputBytes = new TextEncoder().encode(serializedInput).length
+            if (options.maxInputBytes !== undefined && (!Number.isSafeInteger(options.maxInputBytes) || options.maxInputBytes <= 0)) return {
+                ok: false,
+                text: '',
+                model: target,
+                failure: {
+                    kind: 'configuration',
+                    code: 'input_size_config',
+                    message: 'maxInputBytes must be a positive safe integer.',
+                    fatal: false,
+                    retryable: false,
+                },
+            }
             if (options.maxInputBytes !== undefined && inputBytes > options.maxInputBytes) return {
                 ok: false,
                 text: '',
@@ -213,6 +225,18 @@ export class Asker {
             const maxOutputTokens = Math.max(1, maxTokens ?? 1024)
             const reservation = estimatedInputTokens + maxOutputTokens
             const tokenBudget = options.tokenBudget
+            if (tokenBudget && (!Number.isSafeInteger(tokenBudget.remainingTokens) || tokenBudget.remainingTokens < 0)) return {
+                ok: false,
+                text: '',
+                model: target,
+                failure: {
+                    kind: 'configuration',
+                    code: 'actor_budget_policy',
+                    message: 'Token budget remainingTokens must be a non-negative safe integer.',
+                    fatal: false,
+                    retryable: false,
+                },
+            }
             if (tokenBudget && reservation > tokenBudget.remainingTokens && tokenBudget.requestExtension) {
                 const granted = await tokenBudget.requestExtension({
                     requiredTokens: reservation,
@@ -223,7 +247,7 @@ export class Asker {
                     modelId: target.modelId,
                     local: config.local === true,
                 })
-                if (!Number.isSafeInteger(granted) || granted < 0) return {
+                if (!Number.isSafeInteger(granted) || granted < 0 || !Number.isSafeInteger(tokenBudget.remainingTokens + granted)) return {
                     ok: false,
                     text: '',
                     model: target,
@@ -267,7 +291,7 @@ export class Asker {
                 },
             )) as GenerationResult<T>
             const usage = res.usage
-            if (tokenBudget && usage?.available && Number.isFinite(usage.totalTokens) && usage.totalTokens > 0)
+            if (tokenBudget && usage?.available && Number.isSafeInteger(usage.totalTokens) && usage.totalTokens > 0)
                 tokenBudget.remainingTokens += reservation - usage.totalTokens
             emitMetric(options.metricsSink ?? this.metricsSink, {
                 kind: 'llm',
