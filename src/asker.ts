@@ -192,6 +192,65 @@ export class Asker {
             const temperature = options.temperature ?? config.temperature
             const contextWindow = options.contextWindow ?? config.contextWindow
             const timeoutMs = options.timeoutMs ?? config.timeoutMs ?? (config.local ? 180_000 : 60_000)
+            const serializedInput = callPrompt + (options.system ?? '') + (format ? JSON.stringify(format) : '')
+            const inputBytes = new TextEncoder().encode(serializedInput).length
+            if (options.maxInputBytes !== undefined && inputBytes > options.maxInputBytes) return {
+                ok: false,
+                text: '',
+                model: target,
+                failure: {
+                    kind: 'configuration',
+                    code: 'input_size',
+                    message: `Model input exceeds byte limit (${inputBytes} > ${options.maxInputBytes}). Narrow context or explicitly revise the byte limit.`,
+                    fatal: false,
+                    retryable: false,
+                },
+            }
+
+            // Token budgets are token-denominated. Bytes remain only a serialization guard.
+            // The pre-call estimate is conservative and is reconciled to provider-reported usage.
+            const estimatedInputTokens = Math.max(1, Math.ceil(inputBytes / 3))
+            const maxOutputTokens = Math.max(1, maxTokens ?? 1024)
+            const reservation = estimatedInputTokens + maxOutputTokens
+            const tokenBudget = options.tokenBudget
+            if (tokenBudget && reservation > tokenBudget.remainingTokens && tokenBudget.requestExtension) {
+                const granted = await tokenBudget.requestExtension({
+                    requiredTokens: reservation,
+                    remainingTokens: tokenBudget.remainingTokens,
+                    estimatedInputTokens,
+                    maxOutputTokens,
+                    providerId: target.providerId,
+                    modelId: target.modelId,
+                    local: config.local === true,
+                })
+                if (!Number.isSafeInteger(granted) || granted < 0) return {
+                    ok: false,
+                    text: '',
+                    model: target,
+                    failure: {
+                        kind: 'configuration',
+                        code: 'actor_budget_policy',
+                        message: 'Token-budget policy returned an invalid extension.',
+                        fatal: false,
+                        retryable: false,
+                    },
+                }
+                tokenBudget.remainingTokens += granted
+            }
+            if (tokenBudget && reservation > tokenBudget.remainingTokens) return {
+                ok: false,
+                text: '',
+                model: target,
+                failure: {
+                    kind: 'configuration',
+                    code: 'actor_budget',
+                    message: `Actor token budget exceeded before provider call (estimated input ${estimatedInputTokens} tokens, reservation ${reservation}, remaining ${tokenBudget.remainingTokens}). Narrow context or explicitly revise the budget.`,
+                    fatal: false,
+                    retryable: false,
+                },
+            }
+            if (tokenBudget) tokenBudget.remainingTokens -= reservation
+
             const res = await this.circuit.execute(target, () => this.completion.generate(
                 callPrompt,
                 target,
@@ -208,6 +267,8 @@ export class Asker {
                 },
             )) as GenerationResult<T>
             const usage = res.usage
+            if (tokenBudget && usage?.available && Number.isFinite(usage.totalTokens) && usage.totalTokens >= 0)
+                tokenBudget.remainingTokens += reservation - usage.totalTokens
             emitMetric(options.metricsSink ?? this.metricsSink, {
                 kind: 'llm',
                 timestamp: new Date().toISOString(),
