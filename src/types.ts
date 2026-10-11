@@ -122,6 +122,23 @@ export interface PromptTemplate {
     manifest: Record<string, unknown>
 }
 
+export interface TokenBudgetExtensionRequest {
+    requiredTokens: number
+    remainingTokens: number
+    estimatedInputTokens: number
+    maxOutputTokens: number
+    providerId: ProviderId
+    modelId: string
+    local: boolean
+}
+
+export interface TokenBudget {
+    /** Mutable remaining budget shared by calls in one execution scope. */
+    remainingTokens: number
+    /** Optional host policy hook. Return additional tokens to grant, or 0 to deny. */
+    requestExtension?: (request: TokenBudgetExtensionRequest) => number | Promise<number>
+}
+
 export interface AskOptions<T = unknown> {
     model?: string | ModelTarget
     task?: string
@@ -136,6 +153,10 @@ export interface AskOptions<T = unknown> {
     allowedProviders?: string[]
     signal?: AbortSignal
     timeoutMs?: number
+    /** Hard serialized input-size guard; independent of token accounting. */
+    maxInputBytes?: number
+    /** Shared cumulative inference budget for this execution scope. */
+    tokenBudget?: TokenBudget
     maxRetries?: number
     providerConfig?: ProviderConfig
     context?: ContextRequest | ContextResolver
