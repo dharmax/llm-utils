@@ -85,6 +85,8 @@ export interface ProviderConfig {
     maxTokens?: number
     /** Default sampling temperature. Per-call values override this. */
     temperature?: number
+    /** Default wall-clock timeout for one provider inference. Per-call values override this. */
+    timeoutMs?: number
     /** Provider-specific defaults. Adapters interpret these without llm-utils inventing a universal taxonomy. */
     providerOptions?: Record<string, unknown>
 }
@@ -126,6 +128,23 @@ export interface PromptTemplate {
     manifest: Record<string, unknown>
 }
 
+export interface TokenBudgetExtensionRequest {
+    requiredTokens: number
+    remainingTokens: number
+    estimatedInputTokens: number
+    maxOutputTokens: number
+    providerId: ProviderId
+    modelId: string
+    local: boolean
+}
+
+export interface TokenBudget {
+    /** Mutable remaining budget shared by calls in one execution scope. */
+    remainingTokens: number
+    /** Optional host policy hook. Return additional tokens to grant, or 0 to deny. */
+    requestExtension?: (request: TokenBudgetExtensionRequest) => number | Promise<number>
+}
+
 export interface AskOptions<T = unknown> {
     model?: string | ModelTarget
     task?: string
@@ -140,6 +159,10 @@ export interface AskOptions<T = unknown> {
     allowedProviders?: string[]
     signal?: AbortSignal
     timeoutMs?: number
+    /** Hard serialized input-size guard; independent of token accounting. */
+    maxInputBytes?: number
+    /** Shared cumulative inference budget for this execution scope. */
+    tokenBudget?: TokenBudget
     maxRetries?: number
     providerConfig?: ProviderConfig
     context?: ContextRequest | ContextResolver

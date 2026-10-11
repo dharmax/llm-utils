@@ -191,6 +191,90 @@ export class Asker {
             const maxTokens = options.maxTokens ?? config.maxTokens
             const temperature = options.temperature ?? config.temperature
             const contextWindow = options.contextWindow ?? config.contextWindow
+            const timeoutMs = options.timeoutMs ?? config.timeoutMs ?? (config.local ? 180_000 : 60_000)
+            const serializedInput = callPrompt + (options.system ?? '') + (format ? JSON.stringify(format) : '')
+            const inputBytes = new TextEncoder().encode(serializedInput).length
+            if (options.maxInputBytes !== undefined && (!Number.isSafeInteger(options.maxInputBytes) || options.maxInputBytes <= 0)) return {
+                ok: false,
+                text: '',
+                model: target,
+                failure: {
+                    kind: 'configuration',
+                    code: 'input_size_config',
+                    message: 'maxInputBytes must be a positive safe integer.',
+                    fatal: false,
+                    retryable: false,
+                },
+            }
+            if (options.maxInputBytes !== undefined && inputBytes > options.maxInputBytes) return {
+                ok: false,
+                text: '',
+                model: target,
+                failure: {
+                    kind: 'configuration',
+                    code: 'input_size',
+                    message: `Model input exceeds byte limit (${inputBytes} > ${options.maxInputBytes}). Narrow context or explicitly revise the byte limit.`,
+                    fatal: false,
+                    retryable: false,
+                },
+            }
+
+            // Token budgets are token-denominated. Bytes remain only a serialization guard.
+            // The pre-call estimate is conservative and is reconciled to provider-reported usage.
+            const estimatedInputTokens = Math.max(1, Math.ceil(inputBytes / 3))
+            const maxOutputTokens = Math.max(1, maxTokens ?? 1024)
+            const reservation = estimatedInputTokens + maxOutputTokens
+            const tokenBudget = options.tokenBudget
+            if (tokenBudget && (!Number.isSafeInteger(tokenBudget.remainingTokens) || tokenBudget.remainingTokens < 0)) return {
+                ok: false,
+                text: '',
+                model: target,
+                failure: {
+                    kind: 'configuration',
+                    code: 'actor_budget_policy',
+                    message: 'Token budget remainingTokens must be a non-negative safe integer.',
+                    fatal: false,
+                    retryable: false,
+                },
+            }
+            if (tokenBudget && reservation > tokenBudget.remainingTokens && tokenBudget.requestExtension) {
+                const granted = await tokenBudget.requestExtension({
+                    requiredTokens: reservation,
+                    remainingTokens: tokenBudget.remainingTokens,
+                    estimatedInputTokens,
+                    maxOutputTokens,
+                    providerId: target.providerId,
+                    modelId: target.modelId,
+                    local: config.local === true,
+                })
+                if (!Number.isSafeInteger(granted) || granted < 0 || !Number.isSafeInteger(tokenBudget.remainingTokens + granted)) return {
+                    ok: false,
+                    text: '',
+                    model: target,
+                    failure: {
+                        kind: 'configuration',
+                        code: 'actor_budget_policy',
+                        message: 'Token-budget policy returned an invalid extension.',
+                        fatal: false,
+                        retryable: false,
+                    },
+                }
+                tokenBudget.remainingTokens += granted
+            }
+            if (tokenBudget && reservation > tokenBudget.remainingTokens) return {
+                ok: false,
+                text: '',
+                model: target,
+                failure: {
+                    kind: 'configuration',
+                    code: 'actor_budget',
+                    message: `Actor token budget exceeded before provider call (estimated input ${estimatedInputTokens} tokens, reservation ${reservation}, remaining ${tokenBudget.remainingTokens}). Narrow context or explicitly revise the budget.`,
+                    fatal: false,
+                    retryable: false,
+                },
+            }
+            if (tokenBudget) tokenBudget.remainingTokens -= reservation
+
             const res = await this.circuit.execute(target, () => this.completion.generate(
                 callPrompt,
                 target,
@@ -203,12 +287,20 @@ export class Asker {
                     providerOptions: options.providerOptions,
                     format,
                     signal: options.signal,
-                    timeoutMs: options.timeoutMs,
+                    timeoutMs,
                 },
             )) as GenerationResult<T>
             const usage = res.usage
             const local = config.local
             const costUsd = typeof res.costUsd === 'number' && Number.isFinite(res.costUsd) && res.costUsd >= 0 ? res.costUsd : calculateUsageCost(usage, config.pricing)
+            if (tokenBudget) {
+                const reportedTokens = usage?.available && Number.isSafeInteger(usage.totalTokens) && usage.totalTokens > 0
+                    ? usage.totalTokens
+                    : undefined
+                const estimatedOutputTokens = Math.max(1, Math.ceil(new TextEncoder().encode(res.text ?? '').length / 3))
+                const chargedTokens = reportedTokens ?? (estimatedInputTokens + estimatedOutputTokens)
+                tokenBudget.remainingTokens = Math.max(0, tokenBudget.remainingTokens + reservation - chargedTokens)
+            }
             emitMetric(options.metricsSink ?? this.metricsSink, {
                 kind: 'llm',
                 timestamp: new Date().toISOString(),
@@ -234,6 +326,7 @@ export class Asker {
                     ...(maxTokens !== undefined ? {maxTokens} : {}),
                     ...(temperature !== undefined ? {temperature} : {}),
                     ...(contextWindow !== undefined ? {contextWindow} : {}),
+                    timeoutMs,
                     ...(providerEvidence.keys.length ? {providerOptionKeys: providerEvidence.keys, providerOptionsHash: providerEvidence.hash} : {}),
                 },
             })
