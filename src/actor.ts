@@ -691,35 +691,13 @@ export class LLMActor {
                 const finalText = stepResult.record.finalAnswer ?? ''
                 let output: T | undefined
 
-                if (options.schema && finalText) {
+                if (options.schema) {
                     const parsed = parseStructuredJsonResult(finalText, options.schema)
-                    if (parsed.ok) {
-                        output = parsed.data
-                    } else {
-                        const repair = await this.asker.json(
-                            `Extract and format the required structured JSON based on the goal and observations.\n\nGoal: ${effectiveGoal}\n\nObservations/Answer:\n${finalText}`,
-                            options.schema,
-                            {...this.defaultAskOptions, ...runAskOptions},
-                        )
-                        if (signal?.aborted) {
-                            issues.push({kind: 'abort', message: 'Execution aborted by signal.', step: stepResult.record.step})
-                            return finish({
-                                ok: false,
-                                finalText: '',
-                                steps,
-                                totalSteps: steps.length,
-                                haltReason: 'aborted',
-                                error: 'Execution aborted by signal.',
-                            })
-                        }
-                        if (repair.ok) {
-                            output = repair.data
-                        } else {
-                            const error = repair.failure?.message ?? 'Final answer does not satisfy the requested output schema.'
-                            issues.push({kind: 'llm', message: error, step: stepResult.record.step, retryable: false})
-                            return finish({ok: false, finalText, steps, totalSteps: steps.length, haltReason: 'error', error})
-                        }
+                    if (!parsed.ok) {
+                        issues.push({kind: 'llm', message: parsed.message, step: stepResult.record.step, retryable: false})
+                        return finish({ok: false, finalText, steps, totalSteps: steps.length, haltReason: 'error', error: parsed.message})
                     }
+                    output = parsed.data
                 }
 
                 return finish({

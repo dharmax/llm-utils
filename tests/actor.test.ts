@@ -1,4 +1,4 @@
-import {expect, test} from 'bun:test'
+import {expect, spyOn, test} from 'bun:test'
 import {
     Asker,
     CompletionEngine,
@@ -1024,8 +1024,8 @@ test('a different failed-read recovery input is allowed', async () => {
 })
 
 
-test('LLMActor rejects completion when its requested output schema cannot be repaired', async () => {
-    const asker = createMockAsker([{thought: '', action: 'final_answer', finalAnswer: 'Unstructured answer'}, 'still not JSON'])
+test('LLMActor rejects completion when its requested output schema cannot be parsed', async () => {
+    const asker = createMockAsker([{thought: '', action: 'final_answer', finalAnswer: 'Unstructured answer'}])
     const result = await new LLMActor(asker).run('Return a typed result', {schema: z.object({ready: z.boolean()})})
     expect(result.ok).toBe(false)
     expect(result.haltReason).toBe('error')
@@ -1033,31 +1033,28 @@ test('LLMActor rejects completion when its requested output schema cannot be rep
     expect(result.issues.some(issue => issue.kind === 'llm')).toBe(true)
 })
 
-test('LLMActor preserves a valid false value returned by output repair', async () => {
-    const asker = createMockAsker([{thought: '', action: 'final_answer', finalAnswer: 'Disabled'}, {enabled: false}])
+test('LLMActor preserves a valid false value from mechanically parsed output', async () => {
+    const asker = createMockAsker([{thought: '', action: 'final_answer', finalAnswer: '{enabled: false}' }])
     const result = await new LLMActor(asker).run('Return whether enabled', {schema: z.object({enabled: z.boolean()}).transform(value => value.enabled)})
     expect(result.ok).toBe(true)
     expect(result.output).toBe(false)
 })
 
 
-test('structured output repair retains Actor routing and hard provider defaults', async () => {
-    const asks: any[] = []
-    const base = createMockAsker([{thought: '', action: 'final_answer', finalAnswer: 'Disabled'}, {enabled: false}])
-    const asker = {json: async (prompt: string, schema: any, options: any) => { asks.push(options); return base.json(prompt, schema, options) }}
+test('structured output parsing retains Actor routing and hard provider defaults', async () => {
+    const base = createMockAsker([{thought: '', action: 'final_answer', finalAnswer: '{enabled: false}'}])
+    const asks = spyOn(base, 'json')
     const defaults = {task: 'code', model: 'mock/mock-model', allowedProviders: ['mock'], preferLocal: false}
-    const result = await new LLMActor(asker as any, {askOptions: defaults}).run('Return typed feature state', {schema: z.object({enabled: z.boolean()})})
+    const result = await new LLMActor(base, {askOptions: defaults}).run('Return typed feature state', {schema: z.object({enabled: z.boolean()})})
     expect(result.ok).toBe(true)
-    expect(asks).toHaveLength(2)
-    expect(asks[0]).toMatchObject(defaults)
-    expect(asks[1]).toMatchObject(defaults)
+    expect(asks).toHaveBeenCalledTimes(1)
+    expect(asks.mock.calls[0]?.[2]).toMatchObject(defaults)
 })
 
-test('structured output repair lets per-run routing override Actor defaults', async () => {
-    const asks: any[] = []
-    const base = createMockAsker([{thought: '', action: 'final_answer', finalAnswer: 'Disabled'}, {enabled: false}])
-    const asker = {json: async (prompt: string, schema: any, options: any) => { asks.push(options); return base.json(prompt, schema, options) }}
-    const result = await new LLMActor(asker as any, {askOptions: {task: 'default', allowedProviders: ['other']}}).run('Return typed feature state', {schema: z.object({enabled: z.boolean()}), askOptions: {task: 'code', model: 'mock/mock-model', allowedProviders: ['mock']}})
+test('structured output parsing lets per-run routing override Actor defaults', async () => {
+    const base = createMockAsker([{thought: '', action: 'final_answer', finalAnswer: '{enabled: false}'}])
+    const asks = spyOn(base, 'json')
+    const result = await new LLMActor(base, {askOptions: {task: 'default', allowedProviders: ['other']}}).run('Return typed feature state', {schema: z.object({enabled: z.boolean()}), askOptions: {task: 'code', model: 'mock/mock-model', allowedProviders: ['mock']}})
     expect(result.ok).toBe(true)
-    expect(asks[1]).toMatchObject({task: 'code', model: 'mock/mock-model', allowedProviders: ['mock']})
+    expect(asks.mock.calls[0]?.[2]).toMatchObject({task: 'code', model: 'mock/mock-model', allowedProviders: ['mock']})
 })
