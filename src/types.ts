@@ -102,6 +102,11 @@ export interface ModelInfo {
     family?: string
     architecture?: string
     contextWindow?: number
+    maxOutputTokens?: number
+    inputPer1M?: number
+    outputPer1M?: number
+    cachedInputPer1M?: number
+    supportedParameters?: string[]
 }
 
 export interface GenerateOptions {

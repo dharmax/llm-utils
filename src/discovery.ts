@@ -94,7 +94,9 @@ export async function discoverHardware(): Promise<HardwareSummary> {
 function modelFacts(model: ModelInfo): ModelInfo {
     return {id: model.id, providerId: model.providerId, local: model.local, sizeB: model.sizeB,
         parameterSize: model.parameterSize, quantization: model.quantization, family: model.family,
-        architecture: model.architecture, contextWindow: model.contextWindow}
+        architecture: model.architecture, contextWindow: model.contextWindow,
+        maxOutputTokens: model.maxOutputTokens, inputPer1M: model.inputPer1M, outputPer1M: model.outputPer1M,
+        cachedInputPer1M: model.cachedInputPer1M, supportedParameters: model.supportedParameters}
 }
 
 export class ProviderDiscovery {
@@ -169,7 +171,7 @@ export class ProviderDiscovery {
                 summary.verification = probe.installed ? 'verified' : 'unverified'
                 summary.available = probe.installed
                 summary.models = probe.models
-            } else if (summary.configured) {
+            } else if (summary.configured || id === 'openrouter') {
                 try {
                     const verified = options.verifyProvider ? await options.verifyProvider(config) : await this.verifyRemote(config, options.timeoutMs ?? 3000)
                     summary.verification = verified.verification
@@ -184,29 +186,48 @@ export class ProviderDiscovery {
     }
 
     private static async verifyRemote(config: ProviderConfig, timeoutMs: number): Promise<{verification: ProviderAccessSummary['verification']; models?: ModelInfo[]}> {
-        if (!config.apiKey) return {verification: 'unverified'}
         let url: string
         let headers: Record<string, string>
-        if (config.id === 'openai') {
+        if (config.id === 'openrouter') {
+            url = `${(config.baseUrl ?? 'https://openrouter.ai/api/v1').replace(/\/$/, '')}/models`
+            headers = config.apiKey ? {Authorization: `Bearer ${config.apiKey}`} : {}
+        } else if (config.id === 'openai' && config.apiKey) {
             url = `${(config.baseUrl ?? 'https://api.openai.com/v1').replace(/\/$/, '')}/models`
             headers = {Authorization: `Bearer ${config.apiKey}`}
-        } else if (config.id === 'google') {
+        } else if (config.id === 'google' && config.apiKey) {
             url = `${(config.baseUrl ?? 'https://generativelanguage.googleapis.com/v1beta').replace(/\/$/, '')}/models`
             headers = {'x-goog-api-key': config.apiKey}
-        } else if (config.id === 'anthropic') {
+        } else if (config.id === 'anthropic' && config.apiKey) {
             url = `${(config.baseUrl ?? 'https://api.anthropic.com').replace(/\/$/, '')}/v1/models`
             headers = {'x-api-key': config.apiKey, 'anthropic-version': '2023-06-01'}
         } else return {verification: 'unverified'}
         const res = await fetch(url, {headers, signal: AbortSignal.timeout(timeoutMs)})
         if (res.status === 401 || res.status === 403) return {verification: 'rejected'}
         if (!res.ok) return {verification: 'unverified'}
-        const data = await res.json() as {data?: Array<{id?: string}>; models?: Array<{name?: string}>; has_more?: boolean; nextPageToken?: string}
+        const data = await res.json() as {data?: Array<{id?: string; context_length?: number;
+            top_provider?: {max_completion_tokens?: number}; supported_parameters?: string[];
+            pricing?: {prompt?: string; completion?: string; input_cache_read?: string}}>;
+            models?: Array<{name?: string}>; has_more?: boolean; nextPageToken?: string}
         // A partial page must not be mistaken for an exhaustive access list.
         if (data.has_more || data.nextPageToken) return {verification: 'verified'}
         const rows = data.data ?? data.models
-        return {verification: 'verified', ...(Array.isArray(rows) ? {models: rows.flatMap(row => {
+        // OpenRouter's public catalogue establishes model metadata, not account entitlement.
+        return {verification: config.id === 'openrouter' ? 'unverified' : 'verified', ...(Array.isArray(rows) ? {models: rows.flatMap(row => {
             const id = 'id' in row ? row.id : 'name' in row ? row.name?.replace(/^models\//, '') : undefined
-            return typeof id === 'string' ? [{id, providerId: config.id, local: false}] : []
+            if (typeof id !== 'string') return []
+            const model: ModelInfo = {id, providerId: config.id, local: false}
+            if (config.id === 'openrouter' && 'pricing' in row) {
+                for (const [field, raw] of Object.entries({inputPer1M: row.pricing?.prompt,
+                    outputPer1M: row.pricing?.completion, cachedInputPer1M: row.pricing?.input_cache_read})) {
+                    if (raw !== undefined && raw.trim() && Number.isFinite(Number(raw)) && Number(raw) >= 0)
+                        Object.assign(model, {[field]: Number(raw) / 0.000001})
+                }
+                if (typeof row.context_length === 'number' && row.context_length > 0) model.contextWindow = row.context_length
+                if (row.top_provider?.max_completion_tokens && row.top_provider.max_completion_tokens > 0)
+                    model.maxOutputTokens = row.top_provider.max_completion_tokens
+                if (Array.isArray(row.supported_parameters)) model.supportedParameters = row.supported_parameters.filter(p => typeof p === 'string')
+            }
+            return [model]
         })} : {})}
     }
 
