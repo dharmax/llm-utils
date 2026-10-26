@@ -292,3 +292,30 @@ test('basic hardware discovery returns real process host facts without requiring
     expect(result.architecture).toBeTruthy()
     expect(Array.isArray(result.gpus)).toBe(true)
 })
+
+test('OpenRouter catalogue keeps model capabilities without pricing and does not claim entitlement', async () => {
+    globalThis.fetch = (async (input: string | URL | Request) => {
+        expect(String(input)).toBe('https://openrouter.example/api/v1/models')
+        return Response.json({data: [
+            {id: 'vendor/unpriced', context_length: 64000,
+                top_provider: {max_completion_tokens: 4096}, supported_parameters: ['tools', 'structured_outputs']},
+            {id: 'vendor/priced', context_length: 128000,
+                pricing: {prompt: '0.0000002', completion: '0.0000008', input_cache_read: '0.00000005'}},
+        ]})
+    }) as typeof fetch
+    const result = await ProviderDiscovery.discoverEnvironment({hardware, providers: {
+        openrouter: {id: 'openrouter', baseUrl: 'https://openrouter.example/api/v1', available: true},
+    }})
+    expect(result.providers[0]).toMatchObject({
+        verification: 'unverified',
+        models: [
+            {id: 'vendor/unpriced', contextWindow: 64000, maxOutputTokens: 4096,
+                supportedParameters: ['tools', 'structured_outputs']},
+            {id: 'vendor/priced', contextWindow: 128000},
+        ],
+    })
+    const priced = result.providers[0]?.models?.[1]
+    expect(priced?.inputPer1M).toBeCloseTo(0.2)
+    expect(priced?.outputPer1M).toBeCloseTo(0.8)
+    expect(priced?.cachedInputPer1M).toBeCloseTo(0.05)
+})

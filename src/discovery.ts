@@ -216,7 +216,7 @@ export class ProviderDiscovery {
             const id = 'id' in row ? row.id : 'name' in row ? row.name?.replace(/^models\//, '') : undefined
             if (typeof id !== 'string') return []
             const model: ModelInfo = {id, providerId: config.id, local: false}
-            if (config.id === 'openrouter' && 'pricing' in row) {
+            if (config.id === 'openrouter' && 'id' in row) {
                 for (const [field, raw] of Object.entries({inputPer1M: row.pricing?.prompt,
                     outputPer1M: row.pricing?.completion, cachedInputPer1M: row.pricing?.input_cache_read})) {
                     if (raw !== undefined && raw.trim() && Number.isFinite(Number(raw)) && Number(raw) >= 0)
