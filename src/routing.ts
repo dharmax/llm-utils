@@ -1,5 +1,7 @@
 import type {ModelTarget, ProviderConfig, ProviderId} from './types.ts'
 import {isAdviceUsable, readModelAdvice, type ModelAdviceSnapshot} from './model-advice.ts'
+import type {SystemOne} from './system-one.ts'
+import type {MetricsContext, MetricsSink} from './metrics.ts'
 
 export interface TaskRouteMap {
     [task: string]: string | ModelTarget
@@ -18,6 +20,7 @@ export interface ModelRouterOptions {
     advicePath?: string | false
     /** Supply current model lists for synchronous availability validation. */
     providers?: Record<string, ProviderConfig>
+    adviceSnapshot?: ModelAdviceSnapshot
 }
 
 export const DEFAULT_TASK_ROUTES: TaskRouteMap = {
@@ -39,6 +42,7 @@ export class ModelRouter {
     private readonly configuredDefault: boolean
     private readonly advicePath?: string | false
     private readonly providers?: Record<string, ProviderConfig>
+    private readonly adviceSnapshot?: ModelAdviceSnapshot
     private readonly fallbacks: NonNullable<ModelRouterOptions['fallbacks']>
 
     constructor(options: ModelRouterOptions = {}) {
@@ -47,6 +51,7 @@ export class ModelRouter {
         this.configuredDefault = options.defaultModel !== undefined || options.routes?.default !== undefined
         this.advicePath = options.advicePath
         this.providers = options.providers
+        this.adviceSnapshot = options.adviceSnapshot
         this.fallbacks = options.fallbacks ?? {}
         this.customRouter = options.router
         this.preferLocal = Boolean(options.preferLocal)
@@ -144,7 +149,73 @@ export class ModelRouter {
     }
 
     getModelAdvice(): ModelAdviceSnapshot | undefined {
-        return this.advicePath === false ? undefined : readModelAdvice(this.advicePath)
+        return this.adviceSnapshot ?? (this.advicePath === false ? undefined : readModelAdvice(this.advicePath))
+    }
+
+    /** A single situated System-1 choice; policy validation and fallback remain with the caller. */
+    async select(
+        task: string,
+        query: string,
+        systemOne: SystemOne,
+        availableProviders: string[],
+        providers: Record<string, ProviderConfig>,
+        context: {
+            role?: string; objective?: string; sessionSummary?: string; requirements?: string[];
+            expectedTurns?: number; expectedInputTokens?: number; expectedOutputTokens?: number;
+            residentLocalModels?: string[] | null; switchingOverheadMs?: number | null;
+            previousLocalModel?: string; preferLocal?: boolean;
+            metrics?: MetricsContext; metricsSink?: MetricsSink;
+        } = {},
+    ): Promise<ModelTarget | undefined> {
+        if (this.explicitRoutes[task] || !query.trim()) return undefined
+        const advice = this.getModelAdvice()
+        const mapped = advice?.workloads[task]
+        if (!mapped) return undefined
+        // Authority already ranked candidates. System 1 selects; we do not score them again.
+        const candidates = [mapped.primary, ...mapped.fallbacks].filter(candidate =>
+            availableProviders.includes(candidate.target.providerId) && isAdviceUsable(candidate, providers)
+        ).slice(0, 10)
+        if (candidates.length < 2) return undefined
+        const criteria = Object.fromEntries(candidates.map((candidate, i) => ['choice' + i, {
+            provider: candidate.target.providerId,
+            model: candidate.target.modelId,
+            suitability: candidate.reason,
+            quality: candidate.expectedQuality,
+            capabilities: candidate.capabilities,
+            contextWindow: candidate.contextWindow,
+            economics: candidate.economics,
+            localFit: candidate.localFit,
+            evidence: candidate.evidence,
+        }]))
+        try {
+            const assessment = await systemOne.assess({
+                task, query: query.slice(0, 3000),
+                role: context.role, objective: context.objective?.slice(0, 1000),
+                sessionSummary: context.sessionSummary?.slice(0, 1200),
+                requirements: context.requirements,
+                expectedTurns: context.expectedTurns,
+                expectedInputTokens: context.expectedInputTokens,
+                expectedOutputTokens: context.expectedOutputTokens,
+                preferLocal: context.preferLocal,
+                authority: {updatedAt: advice.updatedAt, advisor: advice.advisor,
+                    hardware: advice.environment.hardware,
+                    providers: advice.environment.providers.map(p => ({id: p.id, available: p.available, verification: p.verification}))},
+                previousLocalModel: context.previousLocalModel ?? null,
+                residentLocalModels: context.residentLocalModels ?? null,
+                switchingOverheadMs: context.switchingOverheadMs ?? null,
+            }, {route: {
+                type: 'choice',
+                instructions: 'Select the most suitable model for this particular task and query, considering quality, requirements, cost, latency and local switching overhead. Unknown residency is not evidence that a model is loaded. Never trade away required capability merely to avoid switching.',
+                criteria,
+            }}, {metrics: context.metrics, metricsSink: context.metricsSink})
+            const choice = assessment?.answers.route?.choice
+            const index = typeof choice === 'string' && /^choice(?:0|[1-9][0-9]*)$/.test(choice)
+                ? Number(choice.slice(6)) : -1
+            return candidates[index]?.target
+        } catch {
+            // Existing router fallback handles unavailable/malformed System-1 results.
+            return undefined
+        }
     }
 
     /** Asker can recheck local installation only for tasks that could consult advice. */

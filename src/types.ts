@@ -148,6 +148,13 @@ export interface TokenBudget {
 export interface AskOptions<T = unknown> {
     model?: string | ModelTarget
     task?: string
+    /** Context for situated model selection; separate from retrieval context. */
+    routingContext?: {
+        query?: string; role?: string; objective?: string; sessionSummary?: string;
+        requirements?: string[]; expectedTurns?: number; expectedInputTokens?: number;
+        expectedOutputTokens?: number; residentLocalModels?: string[] | null;
+        switchingOverheadMs?: number | null;
+    }
     schema?: ZodType<T>
     system?: string
     temperature?: number

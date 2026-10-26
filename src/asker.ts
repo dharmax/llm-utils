@@ -5,6 +5,7 @@ import {type ContextRequest, type ContextResolver, resolveContext} from './conte
 import {FileTemplateSource, PromptEngine} from './prompts.ts'
 import {ProviderCircuit} from './provider-circuit.ts'
 import {ModelRouter, parseModelTarget} from './routing.ts'
+import type {SystemOne} from './system-one.ts'
 import {ProviderDiscovery} from './discovery.ts'
 import {childMetricsContext, emitMetric, calculateUsageCost, type MetricsSink} from './metrics.ts'
 import {
@@ -44,6 +45,7 @@ export interface AskerOptions {
     circuit?: ProviderCircuit
     metricsSink?: MetricsSink
     advicePath?: string | false
+    systemOne?: SystemOne
 }
 
 export class Asker {
@@ -55,6 +57,8 @@ export class Asker {
     private readonly defaultContext?: ContextResolver
     private readonly preferLocal: boolean
     private readonly metricsSink?: MetricsSink
+    private readonly systemOne?: SystemOne
+    private previousLocalModel?: string
 
     constructor(options: AskerOptions = {}) {
         this.completion = options.completion ?? new CompletionEngine()
@@ -63,6 +67,7 @@ export class Asker {
         this.defaultContext = options.contextResolver ?? options.context
         this.preferLocal = Boolean(options.preferLocal)
         this.metricsSink = options.metricsSink
+        this.systemOne = options.systemOne
 
         // Configure router
         this.router = options.router ?? new ModelRouter({
@@ -162,7 +167,15 @@ export class Asker {
             config.available !== false && config.enabled !== false && (!options.allowedProviders || options.allowedProviders.includes(id)) && (!allowFallback || (!this.circuit.failure(id) && !failedProviders.has(id))),
         ).map(([id]) => id)
         const available = eligibleProviders()
-        let target = this.router.resolve(
+        const selected = this.systemOne && !options.model && !options.providerConfig && options.task
+            ? await this.router.select(options.task, options.routingContext?.query ?? prompt,
+                this.systemOne, available, current, {
+                    ...options.routingContext, previousLocalModel: this.previousLocalModel,
+                    preferLocal: options.preferLocal ?? this.preferLocal,
+                    metrics: options.metrics, metricsSink: options.metricsSink ?? this.metricsSink,
+                })
+            : undefined
+        let target = selected ?? this.router.resolve(
             options.model ? parseModelTarget(options.model) : options.task,
             available,
             options.preferLocal ?? this.preferLocal,
@@ -292,6 +305,7 @@ export class Asker {
             )) as GenerationResult<T>
             const usage = res.usage
             const local = config.local
+            if (res.ok && local) this.previousLocalModel = `${target.providerId}/${target.modelId}`
             const costUsd = typeof res.costUsd === 'number' && Number.isFinite(res.costUsd) && res.costUsd >= 0 ? res.costUsd : calculateUsageCost(usage, config.pricing)
             if (tokenBudget) {
                 const reportedTokens = usage?.available && Number.isSafeInteger(usage.totalTokens) && usage.totalTokens > 0
