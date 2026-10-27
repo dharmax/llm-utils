@@ -1033,6 +1033,42 @@ test('LLMActor rejects completion when its requested output schema cannot be par
     expect(result.issues.some(issue => issue.kind === 'llm')).toBe(true)
 })
 
+test('LLMActor repairs one invalid typed final answer without bypassing its schema', async () => {
+    const asker = createMockAsker([
+        {thought: '', action: 'final_answer', finalAnswer: '[]'},
+        {thought: 'Correct the top-level type.', action: 'final_answer', finalAnswer: '{"ready":true}'},
+    ])
+    const result = await new LLMActor(asker).run('Return a typed result', {schema: z.object({ready: z.boolean()})})
+    expect(result.ok).toBe(true)
+    expect(result.output).toEqual({ready: true})
+    expect(result.totalSteps).toBe(2)
+    expect(result.issues.some(issue => issue.kind === 'llm' && issue.retryable)).toBe(true)
+})
+
+test('LLMActor rejects repeated invalid typed final answers after one correction', async () => {
+    const asker = createMockAsker([
+        {thought: '', action: 'final_answer', finalAnswer: '[]'},
+        {thought: '', action: 'final_answer', finalAnswer: '[]'},
+        {thought: '', action: 'final_answer', finalAnswer: '{"ready":true}'},
+    ])
+    const result = await new LLMActor(asker).run('Return a typed result', {schema: z.object({ready: z.boolean()})})
+    expect(result.ok).toBe(false)
+    expect(result.totalSteps).toBe(2)
+    expect(result.haltReason).toBe('error')
+    expect(result.issues.some(issue => issue.kind === 'llm' && issue.retryable === false)).toBe(true)
+})
+
+test('LLMActor does not retry typed final answers beyond its step budget', async () => {
+    const asker = createMockAsker([
+        {thought: '', action: 'final_answer', finalAnswer: '[]'},
+        {thought: '', action: 'final_answer', finalAnswer: '{"ready":true}'},
+    ])
+    const result = await new LLMActor(asker).run('Return a typed result', {schema: z.object({ready: z.boolean()}), maxSteps: 1})
+    expect(result.ok).toBe(false)
+    expect(result.totalSteps).toBe(1)
+    expect(result.haltReason).toBe('error')
+})
+
 test('LLMActor preserves a valid false value from mechanically parsed output', async () => {
     const asker = createMockAsker([{thought: '', action: 'final_answer', finalAnswer: '{enabled: false}' }])
     const result = await new LLMActor(asker).run('Return whether enabled', {schema: z.object({enabled: z.boolean()}).transform(value => value.enabled)})

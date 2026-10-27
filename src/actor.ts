@@ -561,6 +561,7 @@ export class LLMActor {
 
         // Auto-inject RAG context if contextResolver is provided
         let effectiveGoal = goal
+        let finalSchemaRepairs = 0
         const resolver = options.contextResolver ?? this.contextResolver
         if (resolver) {
             if (signal?.aborted) {
@@ -694,6 +695,14 @@ export class LLMActor {
                 if (options.schema) {
                     const parsed = parseStructuredJsonResult(finalText, options.schema)
                     if (!parsed.ok) {
+                        // A valid Actor decision can still carry an invalid typed finalAnswer.
+                        // Give the model one explicit correction, never coerce invalid output to success.
+                        if (!finalSchemaRepairs && steps.length < max) {
+                            finalSchemaRepairs++
+                            issues.push({kind: 'llm', message: parsed.message, step: stepResult.record.step, retryable: true})
+                            effectiveGoal += `\n\n## Final-answer correction\nThe preceding finalAnswer failed the required output schema: ${parsed.message}\nThat answer was not accepted. Return a corrected finalAnswer string containing a JSON value matching the required schema. Do not repeat the invalid shape, and do not claim an action succeeded without evidence.`
+                            continue
+                        }
                         issues.push({kind: 'llm', message: parsed.message, step: stepResult.record.step, retryable: false})
                         return finish({ok: false, finalText, steps, totalSteps: steps.length, haltReason: 'error', error: parsed.message})
                     }
