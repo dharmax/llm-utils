@@ -30,6 +30,31 @@ function createMockAsker(responses: any[]) {
     })
 }
 
+test('argument validation failures are effect-free observations with bounded replanning', async () => {
+    const invalid={thought:'Find source',action:'tool_call',toolCalls:[{name:'find_symbol',parameters:{}}]}
+    let executed=0
+    const actor=new LLMActor(createMockAsker([invalid]),{maxSteps:16})
+    actor.registerTool({name:'find_symbol',description:'Find source by name',parameters:z.object({name:z.string()}),execute:()=>{executed++;return 'found'}})
+    const result=await actor.run('Find source')
+    expect(result.ok).toBe(false)
+    expect(result.totalSteps).toBe(3)
+    expect(executed).toBe(0)
+    expect(result.steps[1]!.toolResults[0]!.error).toContain('No new evidence')
+})
+
+test('validation feedback permits corrected arguments without declaring a mutation read-only',async()=>{
+    const invalid={thought:'Find source',action:'tool_call',toolCalls:[{name:'find_symbol',parameters:{}}]}
+    const valid={...invalid,toolCalls:[{name:'find_symbol',parameters:{name:'add'}}]}
+    const actor=new LLMActor(createMockAsker([invalid,valid,{thought:'Observed source',action:'final_answer',finalAnswer:'Found add'}]))
+    let executed=0
+    actor.registerTool({name:'find_symbol',description:'Find source by name',parameters:z.object({name:z.string()}),execute:({name})=>{executed++;return name}})
+    const result=await actor.run('Find source')
+    expect(result.ok).toBe(true)
+    expect(result.totalSteps).toBe(3)
+    expect(executed).toBe(1)
+    expect(result.steps[0]!.toolResults[0]!.failureCategory).toBe('malformed_parameters')
+})
+
 test('progress guard uses enforced per-execution observation effects on a general tool', async () => {
     const call = {thought: '', action: 'tool_call', toolCalls: [{name: 'command', parameters: {}}]}
     const result = await new LLMActor(createMockAsker([call, call, call]), {maxSteps: 10}).run('Inspect evidence', {

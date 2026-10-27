@@ -489,6 +489,7 @@ export class LLMActor {
         const failedUnavailableTools = new Set<string>()
         const observations = new Map<string, {output: string; repeats: number}>()
         const isReadOnlyResult = (result: ToolExecutionResult, tools: ReadonlyMap<string, ToolDefinition>): boolean => {
+            if (result.failureCategory === 'malformed_parameters') return true
             const tool = tools.get(result.toolName)
             try { return tool?.readOnly === true || tool?.isReadOnlyResult?.(result.result) === true }
             catch { return false }
