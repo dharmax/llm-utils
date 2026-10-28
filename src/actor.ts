@@ -132,7 +132,7 @@ export interface ActorStepResult {
     issue?: ActorIssue
 }
 
-export function createActorDecisionSchema(registeredToolNames: string[] = []): z.ZodType<ActorDecision> {
+export function createActorDecisionSchema(registeredToolNames: string[] = [], structuredFinal = false): z.ZodType<ActorDecision> {
     const base = z.object({
         thought: z.string().describe('Establish the whole requested outcome and constraints, choose a method from general knowledge, and identify the concrete evidence/action needed next. Distinguish observed current-state facts from hypotheses.'),
         action: z.enum(['tool_call', 'final_answer']).describe('Choose tool_call to execute tools, or final_answer if goal is achieved'),
@@ -144,11 +144,11 @@ export function createActorDecisionSchema(registeredToolNames: string[] = []): z
                 : z.string().describe('Name of the tool to invoke'),
             parameters: z.record(z.string(), z.unknown()).describe('Tool arguments as key-value pairs'),
         })).optional().default([]),
-        finalAnswer: z.string().optional().describe('Grounded response addressing every requested part, respecting observed constraints and identifying concrete unresolved evidence or blockers when necessary'),
+        finalAnswer: (structuredFinal ? z.json() : z.string()).optional().describe('Grounded response addressing every requested part, respecting observed constraints and identifying concrete unresolved evidence or blockers when necessary'),
     })
 
     return base.superRefine((data, ctx) => {
-        if (data.action === 'final_answer' && !data.finalAnswer?.trim()) ctx.addIssue({code: z.ZodIssueCode.custom, message: 'A final answer must contain a nonempty response to the user.', path: ['finalAnswer']})
+        if (data.action === 'final_answer' && (data.finalAnswer === undefined || (typeof data.finalAnswer === 'string' && !data.finalAnswer.trim()))) ctx.addIssue({code: z.ZodIssueCode.custom, message: 'A final answer must contain a nonempty response to the user.', path: ['finalAnswer']})
         if (data.action === 'tool_call' && registeredToolNames.length > 0) {
             for (let i = 0; i < (data.toolCalls?.length ?? 0); i += 1) {
                 const call = data.toolCalls?.[i]
@@ -175,7 +175,7 @@ export type ActorDecision = {
         name: string
         parameters: Record<string, unknown>
     }>
-    finalAnswer?: string
+    finalAnswer?: unknown
 }
 
 export function normalizeToolParameters(params: Record<string, unknown>, schema: ZodType): Record<string, unknown> {
@@ -294,6 +294,7 @@ export class LLMActor {
         overrideOptions: AskOptions | undefined,
         tools: Map<string, ToolDefinition>,
         runLocalTools: boolean,
+        finalSchema?: ZodType,
         onMissingTool?: (
             toolName: string,
             parameters: Record<string, unknown>,
@@ -310,7 +311,9 @@ export class LLMActor {
         }
         const registeredToolNames = [...tools.keys()]
         const missingToolHandler = runLocalTools ? onMissingTool : (this.onMissingTool ?? onMissingTool)
-        const systemPrompt = this.buildSystemPrompt(catalog, Boolean(missingToolHandler))
+        const systemPrompt = this.buildSystemPrompt(catalog, Boolean(missingToolHandler)) + (finalSchema
+            ? '\n\nFor this typed run, finalAnswer may contain the requested JSON result directly. The host validates the result after you return.'
+            : '')
 
         const conversationPrompt = this.buildTurnPrompt(goal, history, stepNumber)
 
@@ -318,8 +321,8 @@ export class LLMActor {
         const {schema: _s2, ...overrideOpts} = overrideOptions ?? {}
 
         const decisionSchema = missingToolHandler
-            ? createActorDecisionSchema([])
-            : createActorDecisionSchema(registeredToolNames)
+            ? createActorDecisionSchema([], Boolean(finalSchema))
+            : createActorDecisionSchema(registeredToolNames, Boolean(finalSchema))
 
         const askOptions: Omit<AskOptions<ActorDecision>, 'schema'> = {
             maxRetries: 2,
@@ -363,7 +366,7 @@ export class LLMActor {
                 action: 'final_answer',
                 toolCalls: [],
                 toolResults: [],
-                finalAnswer: decision.finalAnswer ?? '',
+                finalAnswer: typeof decision.finalAnswer === 'string' ? decision.finalAnswer : JSON.stringify(decision.finalAnswer) ?? '',
             }
             return {record, isDone: true}
         }
@@ -613,6 +616,7 @@ export class LLMActor {
                 runAskOptions,
                 tools,
                 runLocalTools,
+                options.schema,
                 options.onMissingTool,
             )
             // Successful mutations invalidate prior reads. Failed operations are

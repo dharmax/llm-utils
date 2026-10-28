@@ -23,6 +23,15 @@ function observedAsker(decide: (prompt: string) => unknown) {
     return {asker, prompts}
 }
 
+test('Actor accepts typed final values in one decision', async () => {
+    const proposal = {changes: [], testCommands: []}
+    const {asker, prompts} = observedAsker(() => ({thought: 'Hand off to host checks', action: 'final_answer', finalAnswer: proposal}))
+    const result = await new LLMActor(asker).run('Return a proposal', {schema: ProposalSchema})
+    expect(result.ok).toBe(true)
+    expect(result.output).toEqual(proposal)
+    expect(prompts).toHaveLength(1)
+})
+
 test.each([
     '{"changes":[],"testCommands":[]}',
     "```json\n{changes: [], testCommands: [],}\n```",
