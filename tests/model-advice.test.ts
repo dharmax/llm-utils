@@ -239,6 +239,22 @@ test('missing, corrupt, unusable and disabled advice preserve deterministic fall
     expect(new ModelRouter({advicePath: path, defaultModel: 'remote/configured'}).resolve(undefined, ['remote'])).toEqual({providerId: 'remote', modelId: 'configured'})
 })
 
+test('an explicit default defeats historical implicit cloud task routes when no advice is available', () => {
+    const router = new ModelRouter({
+        advicePath: false,
+        defaultModel: 'ollama/fixture-default',
+        providers: {ollama: {id: 'ollama', available: true, local: true},
+            openai: {id: 'openai', available: true}},
+    })
+    for (const task of ['code', 'fast', 'reasoning', 'creative', 'summarization', 'verification'])
+        expect(router.resolve(task, ['ollama', 'openai'])).toEqual({providerId: 'ollama', modelId: 'fixture-default'})
+    // Explicit task routes remain authoritative.
+    expect(new ModelRouter({
+        advicePath: false, defaultModel: 'ollama/fixture-default',
+        routes: {reasoning: 'openai/fixture-reasoner'},
+    }).resolve('reasoning', ['ollama', 'openai'])).toEqual({providerId: 'openai', modelId: 'fixture-reasoner'})
+})
+
 test('generic workload names and default advice use the existing router without a closed task enum', async () => {
     mockOllama()
     await refreshModelAdvice(authority({...research(), workloads: {
