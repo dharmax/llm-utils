@@ -19,7 +19,7 @@ function fixture(failure = quota, fallbackFails = false) {
     const metrics = new InMemoryMetricsStore()
     const asker = new Asker({
         providers: {openai: {id: 'openai', available: true}, ollama: {id: 'ollama', available: true}},
-        defaultModel: 'ollama/qwen2.5-coder:7b', preferLocal: true, advicePath: false,
+        defaultModel: 'ollama/qwen2.5-coder:7b', routes: {code: 'openai/gpt-4o'}, preferLocal: true, advicePath: false,
         completion, metricsSink: metrics,
     })
     return {asker, calls, metrics}
