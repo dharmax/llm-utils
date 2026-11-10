@@ -131,8 +131,9 @@ export class ModelRouter {
             }
         }
 
-        // Legacy task routes remain the last resort after persisted advice.
-        if (targetStr && this.routes[targetStr]) {
+        // Legacy task routes only apply when no caller-supplied default exists.
+        // An explicit default must never fall through to obsolete hard-coded cloud models.
+        if (targetStr && this.routes[targetStr] && !this.configuredDefault) {
             const parsed = parseModelTarget(this.routes[targetStr]!)
             if (availableProviders.length === 0 || availableProviders.includes(parsed.providerId))
                 return parsed
